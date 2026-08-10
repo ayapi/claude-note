@@ -188,6 +188,9 @@ ClaudeNote.exe --mic-list                   # 録音デバイスの一覧
 ClaudeNote.exe --record-test [秒]           # 録音して文字起こしまで通す
 ClaudeNote.exe --stt-test <wav> [engine]    # 既存の WAV を文字起こし (engine 指定で比較できる)
 ClaudeNote.exe --voice-insert-test          # 吹き出し → 回答の2段階挿入を検証
+ClaudeNote.exe --multipart-test             # テキスト+画像が混ざった応答が重ならないか検証
+ClaudeNote.exe --selection-test <xml>       # 保存済みページ XML に対して選択判定だけ実行
+ClaudeNote.exe --cancel-test                # 実行→キャンセル→続けて次を実行、が通るか検証
 ```
 
 ※ この exe は WinExe のため、コンソールから実行するときは `| Out-String` などで
@@ -237,8 +240,13 @@ Node プロセス。Claude Agent SDK の `query()` に `resume` / `additionalDir
 とするため、既存の手書きや図と重なることが原理的に起きない。音声入力の吹き出しと
 回答も同じ規則で置かれるので、吹き出し → 回答の順に下へ積まれる。
 
+回答にテキストと図が混ざっている場合は、**1 つずつ挿入して そのつど実際の下端を
+測り直す**。テキストの高さは折り返しによって変わり事前に見積もれないため、
+まとめて挿入すると 2 つ目以降が少し上にずれて重なってしまう。
+
 選択範囲の真下に置きたい場合は `insertPosition` を `belowSelection` にする
-(ノートが長いと回答が画面外になるのを避けたいとき向け。ただし重なる可能性がある)。
+(ノートが長いと回答が画面外になるのを避けたいとき向け。ただしこの場合は実測できず
+見積もりで一括挿入するため、重なる可能性がある)。
 
 ## 既知の制限
 

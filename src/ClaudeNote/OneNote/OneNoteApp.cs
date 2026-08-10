@@ -109,6 +109,21 @@ public sealed class OneNoteApp
             ?? throw new UserFacingException("ページ内容を取得できませんでした。");
     }
 
+    /// <summary>
+    /// バイナリ (ink の ISF や画像) を含まない軽いページ XML。
+    /// 位置とサイズは入っているので、挿入位置の計算だけならこちらで足りる。
+    /// </summary>
+    public string GetPageXmlBasic(string pageId)
+    {
+        // PageInfo.piBasic = 0
+        var pageInfo = EnumType("PageInfo");
+        var schema = EnumType("XMLSchema");
+        var args = new object?[] { pageId, null, Enum.ToObject(pageInfo, 0), Xs2013 };
+        Invoke("GetPageContent", [typeof(string), typeof(string).MakeByRefType(), pageInfo, schema], args);
+        return args[1] as string
+            ?? throw new UserFacingException("ページ内容を取得できませんでした。");
+    }
+
     public void UpdatePage(string pageChangesXml)
     {
         var schema = EnumType("XMLSchema");

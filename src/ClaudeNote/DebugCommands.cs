@@ -46,6 +46,8 @@ internal static class DebugCommands
                     return CancelTest(config);
                 case "--selection-test":
                     return SelectionTest(args[1]);
+                case "--multipart-test":
+                    return MultipartTest(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -111,6 +113,86 @@ internal static class DebugCommands
         Console.WriteLine("---- Claude 応答 ----");
         Console.WriteLine(result.Text);
         return 0;
+    }
+
+    /// <summary>
+    /// テキスト・画像・テキストが混ざった応答を挿入し、要素どうしが重ならないことを検証する。
+    /// 折り返す長文を入れて、高さの見積もりでは足りない状況を作る。
+    /// </summary>
+    private static int MultipartTest(AppConfig config)
+    {
+        var onenote = new OneNoteApp();
+        var (sectionId, sectionName) = FindRecentSection(onenote);
+        Console.WriteLine($"対象セクション: {sectionName}");
+
+        var pngPath = Path.Combine(Path.GetTempPath(), "claudenote-multipart-test.png");
+        MakeTrianglePng(pngPath);
+
+        var pageId = onenote.CreateNewPage(sectionId);
+        Console.WriteLine($"テストページ作成: {pageId}");
+        try
+        {
+            var longLine = string.Concat(Enumerable.Repeat("これは折り返しを起こすための長い行です。", 6));
+            var response = string.Join("\n",
+            [
+                "1つ目のテキスト。" + longLine,
+                longLine,
+                "{{image: " + pngPath + " | width=180}}",
+                "2つ目のテキスト。" + longLine,
+                "{{image: " + pngPath + " | width=120}}",
+                "3つ目のテキスト。おわり。",
+            ]);
+
+            var parts = ResponseParser.Parse(response);
+            Console.WriteLine($"パート数: {parts.Count}");
+
+            var sel = new Selection { BoundsPt = new System.Windows.Rect(72, 100, 300, 20) };
+            foreach (var part in parts)
+            {
+                var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: true);
+                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [part], config.ResponseColor, null));
+                System.Threading.Thread.Sleep(400);
+            }
+
+            // 読み戻して、ページ直下の要素が縦に重なっていないか調べる
+            var final = System.Xml.Linq.XDocument.Parse(onenote.GetPageXmlBasic(pageId));
+            var one = PageXml.One;
+            var rects = final.Root!.Elements()
+                .Select(el => new
+                {
+                    Name = el.Name.LocalName,
+                    Pos = el.Element(one + "Position"),
+                    Size = el.Element(one + "Size"),
+                })
+                .Where(x => x.Pos != null && x.Size != null)
+                .Select(x => new
+                {
+                    x.Name,
+                    Y = double.Parse((string)x.Pos!.Attribute("y")!, System.Globalization.CultureInfo.InvariantCulture),
+                    H = double.Parse((string)x.Size!.Attribute("height")!, System.Globalization.CultureInfo.InvariantCulture),
+                })
+                .OrderBy(x => x.Y)
+                .ToList();
+
+            var overlaps = 0;
+            for (var i = 1; i < rects.Count; i++)
+            {
+                var prevBottom = rects[i - 1].Y + rects[i - 1].H;
+                var gap = rects[i].Y - prevBottom;
+                Console.WriteLine($"  {rects[i - 1].Name,-12} 下端={prevBottom,8:0.#} → {rects[i].Name,-12} 上端={rects[i].Y,8:0.#} 隙間={gap,7:0.#}");
+                if (gap < -0.5) overlaps++;
+            }
+            Console.WriteLine(overlaps == 0
+                ? $"OK: {rects.Count} 個の要素が重なりなく縦に並びました"
+                : $"NG: {overlaps} 箇所で重なっています");
+            return overlaps == 0 ? 0 : 1;
+        }
+        finally
+        {
+            onenote.DeleteHierarchyItem(pageId);
+            Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
+            try { File.Delete(pngPath); } catch { }
+        }
     }
 
     /// <summary>保存したページ XML に対して選択判定だけを走らせる (回帰テスト用)。</summary>

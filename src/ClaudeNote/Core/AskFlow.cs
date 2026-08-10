@@ -70,19 +70,8 @@ public sealed class AskFlow
         onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], cfg.VoiceColor, null));
         onProgress?.Invoke("文字起こしを挿入しました。回答を待っています…");
 
-        // 吹き出しがページ最下部の要素になったので、同じ規則で位置を計算し直せば
-        // 回答は自然にその下に入る
-        var answerAnchor = anchor;
-        try
-        {
-            answerAnchor = PageXml.ComputeInsertAnchor(onenote.GetPageXml(pageId), sel, cfg.InsertBelowAll);
-        }
-        catch (Exception ex)
-        {
-            Logger.Log($"挿入後のページ再取得に失敗: {ex.Message}");
-        }
-
         // 2 段階目: Claude に問い合わせて回答を吹き出しの下に入れる
+        // (挿入位置は InsertParts が実測するので、ここで先に決めておく必要はない)
         var (scopeKey, store, entry) = ResolveSession(cfg, pageId, sectionId);
         var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
         var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
@@ -112,7 +101,7 @@ public sealed class AskFlow
             store!.Update(scopeKey, result.SessionId!);
 
         var parts = ResponseParser.Parse(result.Text);
-        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, answerAnchor, parts, cfg.ResponseColor, render?.Map));
+        InsertParts(onenote, pageId, sel, cfg, parts, render?.Map);
 
         if (cfg.KeepArtifacts)
         {
@@ -215,14 +204,10 @@ public sealed class AskFlow
         if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
             store!.Update(scopeKey, result.SessionId!);
 
-        // 挿入位置はページ全体の下端 (空白部分) を基準にする。既存の内容と重ならない
-        var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXml(pageId), sel, cfg.InsertBelowAll);
-        Logger.Log($"挿入位置: x={anchor.X:0.#} y={anchor.Bottom:0.#} ({cfg.InsertPosition})");
         var parts = ResponseParser.Parse(result.Text);
         var figures = parts.Count(p => p is ImagePart or InkPart);
         if (figures > 0) Logger.Log($"応答に図が {figures} 個含まれています");
-        var updateXml = PageXml.BuildResponseXml(pageId, anchor, parts, cfg.ResponseColor, render?.Map);
-        onenote.UpdatePage(updateXml);
+        InsertParts(onenote, pageId, sel, cfg, parts, render?.Map);
 
         if (cfg.KeepArtifacts)
         {
@@ -234,6 +219,44 @@ public sealed class AskFlow
         }
 
         return new AskResult(result.Text, render?.PngPath, dir, resumeId != null);
+    }
+
+    /// <summary>
+    /// 応答をノートへ挿入する。
+    /// テキストの高さは折り返しによって変わり、こちらでは正確に見積もれないため、
+    /// 本文は 1 つずつ入れて、そのつど実際の下端を測り直してから次を置く。
+    /// (見積もりで一括挿入すると 2 つ目以降が少し上にずれて重なる)
+    /// </summary>
+    private static void InsertParts(OneNoteApp onenote, string pageId, Selection sel, AppConfig cfg,
+        IReadOnlyList<ResponsePart> parts, CaptureMap? map)
+    {
+        // 重ね書き (補助線) は元の図の上に置くもので、本文の流れとは無関係
+        var overlays = parts.OfType<InkPart>().Where(p => p.Overlay).ToList();
+        if (overlays.Count > 0 && map != null)
+        {
+            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, new Rect(), [.. overlays], cfg.ResponseColor, map));
+            Logger.Log($"補助線を {overlays.Count} 個重ねました");
+        }
+
+        var flow = parts.Where(p => p is not InkPart { Overlay: true }).ToList();
+        if (flow.Count == 0) return;
+
+        // ページ下端に積む場合は、挿入のたびに実測できる
+        if (cfg.InsertBelowAll)
+        {
+            foreach (var part in flow)
+            {
+                var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: true);
+                Logger.Log($"挿入位置: x={anchor.X:0.#} y={anchor.Bottom:0.#} ({part.GetType().Name})");
+                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [part], cfg.ResponseColor, map));
+            }
+            return;
+        }
+
+        // 選択範囲の真下に置く場合は実測できないので、従来どおり見積もりで一括挿入する
+        var fallback = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: false);
+        Logger.Log($"挿入位置: x={fallback.X:0.#} y={fallback.Bottom:0.#} (belowSelection、一括)");
+        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, fallback, [.. flow], cfg.ResponseColor, map));
     }
 
     private static Task<ClaudeResult> AskEngineAsync(AppConfig cfg, string prompt, string cwd, string? resumeId,
