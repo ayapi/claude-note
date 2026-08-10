@@ -61,6 +61,17 @@ public sealed class AppConfig
     [JsonPropertyName("responseColor")]
     public string ResponseColor { get; set; } = "#1F4E79";
 
+    /// <summary>
+    /// 回答の挿入位置。"belowAll" (既定) はページ全体の下端 (空白部分) に置くため
+    /// 既存の内容と重ならない。"belowSelection" は選択範囲の真下に置く。
+    /// x 座標はどちらも選択範囲の左端に揃える。
+    /// </summary>
+    [JsonPropertyName("insertPosition")]
+    public string InsertPosition { get; set; } = "belowAll";
+
+    public bool InsertBelowAll =>
+        !InsertPosition.Equals("belowSelection", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>キャプチャ PNG と応答を残すか。</summary>
     [JsonPropertyName("keepArtifacts")]
     public bool KeepArtifacts { get; set; } = true;
@@ -253,6 +264,7 @@ public sealed class AppConfig
             ClaudePath = ClaudePath,
             TimeoutSeconds = TimeoutSeconds,
             ResponseColor = ResponseColor,
+            InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
             SessionScope = SessionScope,
             WorkspaceDir = profile.WorkspaceDir ?? WorkspaceDir,

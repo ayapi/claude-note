@@ -52,6 +52,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `claudePath` | claude CLI のフルパス。`null` なら PATH から探す |
 | `timeoutSeconds` | Claude 応答のタイムアウト |
 | `responseColor` | 挿入テキストの色 (CSS hex)。既定は紺色 `#1F4E79` |
+| `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowSelection` は選択範囲の真下。x 座標はどちらも選択範囲の左端に揃う |
 | `keepArtifacts` | キャプチャ PNG と応答を `%LOCALAPPDATA%\ClaudeNote\workspace\captures` に残す |
 | `sessionScope` | 会話継続の単位。`section` (既定) / `page` / `off` (毎回新規) |
 | `workspaceDir` | Claude の作業ディレクトリ。`null` で `%LOCALAPPDATA%\ClaudeNote\workspace` |
@@ -215,9 +216,22 @@ Node プロセス。Claude Agent SDK の `query()` に `resume` / `additionalDir
 - 手書きはストローク断片ごとに `one:InkDrawing` として保存されており、
   各要素の `one:Position`/`one:Size` (pt) で再配置して合成する
 
+## 回答の挿入位置
+
+既定 (`insertPosition: "belowAll"`) では、
+
+- **x** は選択していた内容の左端に揃える (話の流れが縦に並ぶ)
+- **y** はページ上の全要素の下端、つまり**まだ何も書かれていない空白部分**
+
+とするため、既存の手書きや図と重なることが原理的に起きない。音声入力の吹き出しと
+回答も同じ規則で置かれるので、吹き出し → 回答の順に下へ積まれる。
+
+選択範囲の真下に置きたい場合は `insertPosition` を `belowSelection` にする
+(ノートが長いと回答が画面外になるのを避けたいとき向け。ただし重なる可能性がある)。
+
 ## 既知の制限
 
 - アウトライン内に変換された手書きテキスト (InkWord) は位置情報を持たないため、
   キャプチャ画像の末尾にまとめて描画される (通常の自由手書きは影響なし)
-- 応答の挿入位置は「選択範囲の外接矩形の真下」。既存要素と重なる場合がある
+- ノートが長い場合、回答はページ末尾に入るため選択範囲から離れた位置になる
 - 挿入されるのはプレーンテキストのみ (数式レンダリングなどはなし)

@@ -62,24 +62,21 @@ public sealed class AskFlow
         }
 
         // 1 段階目: 文字起こしを吹き出しとして先に入れる
-        var anchor = sel.BoundsPt ?? sel.FallbackBoundsPt ?? new Rect(72, 72, 240, 20);
+        var anchor = PageXml.ComputeInsertAnchor(pageXml, sel, cfg.InsertBelowAll);
         var bubble = cfg.VoicePrefix + voiceText;
         onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], cfg.VoiceColor, null));
         onProgress?.Invoke("文字起こしを挿入しました。回答を待っています…");
 
-        // 挿入された吹き出しの実際の位置を読み直し、回答をその下に置く
+        // 吹き出しがページ最下部の要素になったので、同じ規則で位置を計算し直せば
+        // 回答は自然にその下に入る
         var answerAnchor = anchor;
         try
         {
-            var after = onenote.GetPageXml(pageId);
-            if (PageXml.FindOutlineByText(after, voiceText) is Rect inserted)
-                answerAnchor = inserted;
-            else
-                Logger.Log("挿入した吹き出しを再取得できませんでした。元の位置を基準にします。");
+            answerAnchor = PageXml.ComputeInsertAnchor(onenote.GetPageXml(pageId), sel, cfg.InsertBelowAll);
         }
         catch (Exception ex)
         {
-            Logger.Log($"吹き出し位置の再取得に失敗: {ex.Message}");
+            Logger.Log($"挿入後のページ再取得に失敗: {ex.Message}");
         }
 
         // 2 段階目: Claude に問い合わせて回答を吹き出しの下に入れる
@@ -215,7 +212,9 @@ public sealed class AskFlow
         if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
             store!.Update(scopeKey, result.SessionId!);
 
-        var anchor = sel.BoundsPt ?? sel.FallbackBoundsPt ?? new Rect(72, 72, 240, 20);
+        // 挿入位置はページ全体の下端 (空白部分) を基準にする。既存の内容と重ならない
+        var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXml(pageId), sel, cfg.InsertBelowAll);
+        Logger.Log($"挿入位置: x={anchor.X:0.#} y={anchor.Bottom:0.#} ({cfg.InsertPosition})");
         var parts = ResponseParser.Parse(result.Text);
         var figures = parts.Count(p => p is ImagePart or InkPart);
         if (figures > 0) Logger.Log($"応答に図が {figures} 個含まれています");

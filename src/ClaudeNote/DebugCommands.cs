@@ -150,25 +150,50 @@ internal static class DebugCommands
         try
         {
             var voiceText = "この三角形の面積はどうやって求めるの";
-            var anchor = new System.Windows.Rect(72, 100, 300, 80);
+
+            // 既存の内容を模した「じゃまな」アウトラインを 2 つ置く。
+            // 選択範囲より下にもあるので、真下に入れる方式だと必ず重なる配置
+            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, new System.Windows.Rect(72, 100, 300, 0),
+                [new TextPart("既存の内容A")], "#888888", null));
+            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, new System.Windows.Rect(72, 300, 300, 0),
+                [new TextPart("既存の内容B (これより下が空白)")], "#888888", null));
+            System.Threading.Thread.Sleep(800);
+
+            // 選択範囲は上の方 (既存の内容A のあたり) にあると仮定する
+            var pageXml = onenote.GetPageXml(pageId);
+            var contentBottom = PageXml.ComputeContentBottom(pageXml);
+            Console.WriteLine($"ページ全体の下端: {contentBottom:0.#}");
+
+            var sel = new Selection { BoundsPt = new System.Windows.Rect(120, 110, 200, 20) };
+            var anchor = PageXml.ComputeInsertAnchor(pageXml, sel, belowAll: true);
+            Console.WriteLine($"算出した挿入位置: x={anchor.X:0.#} y={anchor.Bottom:0.#} (選択の左端={sel.BoundsPt?.X:0.#})");
+            if (Math.Abs(anchor.X - 120) > 0.1)
+            {
+                Console.WriteLine("NG: x が選択範囲の左端に揃っていません");
+                return 1;
+            }
+            if (contentBottom is double cb && anchor.Bottom < cb - 0.1)
+            {
+                Console.WriteLine("NG: y がページ下端より上です (重なる位置)");
+                return 1;
+            }
 
             // 1 段階目: 吹き出し
             var bubble = config.VoicePrefix + voiceText;
             onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], config.VoiceColor, null));
             System.Threading.Thread.Sleep(800);
 
-            // 挿入された吹き出しの実位置を取得
-            var after = onenote.GetPageXml(pageId);
-            var found = PageXml.FindOutlineByText(after, voiceText);
-            if (found is not System.Windows.Rect bubbleRect)
+            var bubbleRect = PageXml.FindOutlineByText(onenote.GetPageXml(pageId), voiceText);
+            if (bubbleRect is not System.Windows.Rect br)
             {
                 Console.WriteLine("NG: 挿入した吹き出しを見つけられませんでした");
                 return 1;
             }
-            Console.WriteLine($"吹き出しの実位置: x={bubbleRect.X:0.#} y={bubbleRect.Y:0.#} h={bubbleRect.Height:0.#}");
+            Console.WriteLine($"吹き出しの実位置: x={br.X:0.#} y={br.Y:0.#} h={br.Height:0.#}");
 
-            // 2 段階目: 回答を吹き出しの下へ
-            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, bubbleRect,
+            // 2 段階目: 同じ規則で計算し直すと、吹き出しが最下部なので回答はその下に入る
+            var answerAnchor = PageXml.ComputeInsertAnchor(onenote.GetPageXml(pageId), sel, belowAll: true);
+            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, answerAnchor,
                 [new TextPart("底辺かける高さわる2だよ。まず底辺がどれか探してみて。")], config.ResponseColor, null));
             System.Threading.Thread.Sleep(800);
 
@@ -182,12 +207,16 @@ internal static class DebugCommands
                 return 1;
             }
             Console.WriteLine($"吹き出し y={b2.Y:0.#} (下端 {b2.Bottom:0.#}) / 回答 y={a2.Y:0.#}");
+
+            // 既存の内容とも重なっていないことを確かめる
+            var existingB = PageXml.FindOutlineByText(final, "これより下が空白");
+            var clearsExisting = existingB is not System.Windows.Rect eb || a2.Y >= eb.Bottom - 1;
             var ordered = a2.Y >= b2.Bottom - 1;
-            var noOverlap = a2.Y > b2.Y;
-            Console.WriteLine(ordered && noOverlap
-                ? "OK: 回答が吹き出しの下に入りました"
-                : "NG: 回答の位置が吹き出しと重なっています");
-            return ordered && noOverlap ? 0 : 1;
+            Console.WriteLine($"既存の内容Bの下端={((existingB as System.Windows.Rect?)?.Bottom):0.#} → 回答はその下={clearsExisting}");
+            Console.WriteLine(ordered && clearsExisting
+                ? "OK: 回答が吹き出しの下、かつ既存の内容より下に入りました"
+                : "NG: 回答の位置が重なっています");
+            return ordered && clearsExisting ? 0 : 1;
         }
         finally
         {

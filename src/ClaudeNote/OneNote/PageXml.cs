@@ -225,6 +225,40 @@ public static class PageXml
     }
 
     /// <summary>
+    /// ページ上のすべての要素の下端 (pt)。ここより下は空白なので、
+    /// 回答をここに置けば既存の内容と重ならない。要素が無ければ null。
+    /// </summary>
+    public static double? ComputeContentBottom(string pageXml)
+    {
+        var page = XDocument.Parse(pageXml).Root;
+        if (page == null) return null;
+
+        double? bottom = null;
+        foreach (var el in page.Elements())
+        {
+            if (ReadRect(el) is not Rect r) continue;
+            if (bottom is not double b || r.Bottom > b) bottom = r.Bottom;
+        }
+        return bottom;
+    }
+
+    /// <summary>
+    /// 回答の挿入位置を決める。x は選択範囲の左端に揃え、y はページ全体の下端
+    /// (空白部分) にすることで、既存の内容と重ならないようにする。
+    /// </summary>
+    public static Rect ComputeInsertAnchor(string pageXml, Selection sel, bool belowAll)
+    {
+        var selRect = sel.BoundsPt ?? sel.FallbackBoundsPt ?? new Rect(72, 72, 240, 20);
+        if (!belowAll) return selRect;
+
+        var contentBottom = ComputeContentBottom(pageXml);
+        // 選択範囲より上には置かない (空のページや位置が取れない場合の保険)
+        var y = contentBottom is double b && b > selRect.Bottom ? b : selRect.Bottom;
+        // 高さ 0 の矩形にして、下端 = 挿入の基準線とする
+        return new Rect(selRect.X, y, selRect.Width, 0);
+    }
+
+    /// <summary>
     /// 直前に挿入したアウトラインを本文の一部で探して、その矩形を返す。
     /// 2 段階挿入 (文字起こし → 回答) で、後続を実際の位置の下に置くために使う。
     /// 見つからなければ null。
