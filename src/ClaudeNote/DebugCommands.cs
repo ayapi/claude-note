@@ -76,7 +76,7 @@ internal static class DebugCommands
 
     private static int CaptureTest()
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
         var pageId = onenote.GetCurrentPageId();
         if (string.IsNullOrEmpty(pageId))
         {
@@ -121,7 +121,7 @@ internal static class DebugCommands
     /// </summary>
     private static int MultipartTest(AppConfig config)
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
         var (sectionId, sectionName) = FindRecentSection(onenote);
         Console.WriteLine($"対象セクション: {sectionName}");
 
@@ -280,7 +280,7 @@ internal static class DebugCommands
     /// </summary>
     private static int VoiceInsertTest(AppConfig config)
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
         var (sectionId, sectionName) = FindRecentSection(onenote);
         Console.WriteLine($"対象セクション: {sectionName}");
 
@@ -367,7 +367,7 @@ internal static class DebugCommands
     /// <summary>図 (画像 + インク + 補助線) の挿入をテストページで検証する。</summary>
     private static int FigureTest(AppConfig config)
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
         var (sectionId, sectionName) = FindRecentSection(onenote);
         Console.WriteLine($"対象セクション: {sectionName}");
 
@@ -485,7 +485,7 @@ internal static class DebugCommands
 
     private static int InsertTest(AppConfig config)
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
 
         // 直近に編集されたページのセクションにテストページを作る (終わったら削除)
         var hier = System.Xml.Linq.XDocument.Parse(onenote.GetHierarchyXml());

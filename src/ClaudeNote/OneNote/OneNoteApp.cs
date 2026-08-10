@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Xml.Linq;
 
 namespace ClaudeNote;
@@ -9,8 +10,12 @@ namespace ClaudeNote;
 /// OneNote の IDispatch は型情報の取得に失敗するため、dynamic や InvokeMember の
 /// 遅延バインディングは使えない。GAC の Interop アセンブリ (PIA) をロードし、
 /// 管理ラッパークラス Application2Class をリフレクションで呼び出す。
+///
+/// 重要: 使い終わったら必ず Dispose すること。COM 参照を掴んだままにすると、
+/// ユーザーが OneNote を閉じてもプロセスが終了できず、次に起動したときに
+/// 「前回開いた OneNote のクリーンアップ作業中です」と出て起動できなくなる。
 /// </summary>
-public sealed class OneNoteApp
+public sealed class OneNoteApp : IDisposable
 {
     private const string PiaNamespace = "Microsoft.Office.Interop.OneNote.";
 
@@ -76,15 +81,17 @@ public sealed class OneNoteApp
     /// <summary>現在アクティブなページとセクションの ID。取得できなければ空文字。</summary>
     public (string PageId, string SectionId) GetCurrentContext()
     {
+        object? windows = null;
+        object? current = null;
         try
         {
             // Application2Class.Windows は生の __ComObject を返すため、実行時型ではなく
             // PIA の ComImport インターフェイス型 (QI 経由) でプロパティを引く必要がある
-            var windows = GetProp(_app, "Windows");
+            windows = GetProp(_app, "Windows");
             if (windows == null) return ("", "");
             var winsIface = _pia.GetType(PiaNamespace + "Windows", true)!;
             var winIface = _pia.GetType(PiaNamespace + "Window", true)!;
-            var current = GetPropVia(winsIface, windows, "CurrentWindow");
+            current = GetPropVia(winsIface, windows, "CurrentWindow");
             if (current == null) return ("", "");
             var pageId = GetPropVia(winIface, current, "CurrentPageId") as string ?? "";
             var sectionId = GetPropVia(winIface, current, "CurrentSectionId") as string ?? "";
@@ -94,6 +101,40 @@ public sealed class OneNoteApp
         {
             Logger.Log($"現在ページの取得に失敗: {ex}");
             return ("", "");
+        }
+        finally
+        {
+            // 中間オブジェクトも COM 参照なので必ず解放する
+            Release(current);
+            Release(windows);
+        }
+    }
+
+    private static void Release(object? comObject)
+    {
+        if (comObject == null) return;
+        try
+        {
+            if (Marshal.IsComObject(comObject)) Marshal.ReleaseComObject(comObject);
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"COM オブジェクトの解放に失敗: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// OneNote への参照を手放す。これを怠ると OneNote のプロセスが終了できなくなる。
+    /// </summary>
+    public void Dispose()
+    {
+        try
+        {
+            if (Marshal.IsComObject(_app)) Marshal.FinalReleaseComObject(_app);
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"OneNote への参照の解放に失敗: {ex.Message}");
         }
     }
 
@@ -113,12 +154,19 @@ public sealed class OneNoteApp
     /// バイナリ (ink の ISF や画像) を含まない軽いページ XML。
     /// 位置とサイズは入っているので、挿入位置の計算だけならこちらで足りる。
     /// </summary>
-    public string GetPageXmlBasic(string pageId)
+    public string GetPageXmlBasic(string pageId) => GetPageXmlWith(pageId, 0);
+
+    /// <summary>
+    /// 選択マーカー付き・バイナリ無しのページ XML。
+    /// 「何が選ばれているか」を調べるだけならこれで足り、巨大なページでも速い。
+    /// </summary>
+    public string GetPageXmlSelectionOnly(string pageId) => GetPageXmlWith(pageId, 2);
+
+    private string GetPageXmlWith(string pageId, int pageInfoValue)
     {
-        // PageInfo.piBasic = 0
         var pageInfo = EnumType("PageInfo");
         var schema = EnumType("XMLSchema");
-        var args = new object?[] { pageId, null, Enum.ToObject(pageInfo, 0), Xs2013 };
+        var args = new object?[] { pageId, null, Enum.ToObject(pageInfo, pageInfoValue), Xs2013 };
         Invoke("GetPageContent", [typeof(string), typeof(string).MakeByRefType(), pageInfo, schema], args);
         return args[1] as string
             ?? throw new UserFacingException("ページ内容を取得できませんでした。");

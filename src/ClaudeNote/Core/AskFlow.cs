@@ -32,7 +32,7 @@ public sealed class AskFlow
     public async Task<AskResult> RunVoiceAsync(string wavPath, Action<string>? onProgress = null,
         CancellationToken ct = default)
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
 
         var (pageId, sectionId) = onenote.GetCurrentContext();
         if (string.IsNullOrEmpty(pageId))
@@ -54,11 +54,13 @@ public sealed class AskFlow
         ct.ThrowIfCancellationRequested();
 
         // 選択範囲があれば一緒に送る (「この図の面積は?」のような使い方)
-        var pageXml = onenote.GetPageXml(pageId);
+        var pageXml = onenote.GetPageXmlSelectionOnly(pageId);
         var sel = PageXml.ParseSelection(pageXml);
         RenderResult? render = null;
         if (cfg.VoiceIncludesSelection && sel.HasVisual)
         {
+            // 描画に必要なときだけ ISF/画像込みで取り直す
+            sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));
             render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"));
             if (render != null)
                 Logger.Log($"音声入力に選択範囲を添付: {render.WidthPx}x{render.HeightPx}px");
@@ -140,7 +142,7 @@ public sealed class AskFlow
 
     public async Task<AskResult> RunAsync(Action<string>? onProgress = null, CancellationToken ct = default)
     {
-        var onenote = new OneNoteApp();
+        using var onenote = new OneNoteApp();
 
         var (pageId, sectionId) = onenote.GetCurrentContext();
         if (string.IsNullOrEmpty(pageId))
@@ -155,10 +157,14 @@ public sealed class AskFlow
             Logger.Log($"セクション '{sectionName}' → プロファイル {matched}");
         }
 
-        var pageXml = onenote.GetPageXml(pageId);
-        var sel = PageXml.ParseSelection(pageXml);
+        // まずバイナリ抜きの軽い XML で「何が選ばれているか」だけ調べる。
+        // インクの多いページでは ISF 込みの取得に数十秒かかり、その間 OneNote を
+        // 掴み続けることになるため、必要なときだけ取りに行く
+        var sel = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
         if (sel.IsEmpty)
             throw new UserFacingException("OneNote 上で何も選択されていません。なげなわ選択やドラッグで範囲を選んでから実行してください。");
+        if (sel.HasVisual)
+            sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));  // 描画に ISF/画像が要る
 
         var workspace = ResolveWorkspace(cfg);
         var dir = Path.Combine(workspace, "captures", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
