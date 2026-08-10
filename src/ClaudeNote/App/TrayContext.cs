@@ -15,6 +15,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly ForegroundWatcher? _foreground;
     private readonly AudioRecorder _recorder = new();
     private System.Windows.Forms.Timer? _recordLimitTimer;
+    private System.Windows.Forms.Timer? _hideTimer;
     private CancellationTokenSource? _cts;
     private bool _busy;
     private DateTime _lastProgressBalloon;
@@ -75,18 +76,50 @@ public sealed class TrayContext : ApplicationContext
             $"常駐を開始しました。OneNote で範囲を選択して {config.Hotkey} を押してください。", ToolTipIcon.Info);
     }
 
-    /// <summary>OneNote が前面のときだけボタンを見せる。フォーカスを奪わないよう ShowWithoutActivation に任せる。</summary>
+    /// <summary>
+    /// OneNote が前面のときだけボタンを見せる。
+    /// ペン操作中は IME やインクのパネルなどが一瞬だけ前面を奪うことがあるため、
+    /// 非表示にする前に猶予を置き、その間に OneNote へ戻れば消さない (ちらつき防止)。
+    /// 録音中・処理中は消さない。
+    /// </summary>
     private void ApplyButtonVisibility(bool isOneNoteForeground)
     {
         if (_floatButton == null || _floatButton.IsDisposed) return;
+
         if (isOneNoteForeground)
         {
+            _hideTimer?.Stop();
             if (!_floatButton.Visible) _floatButton.Show();
+            return;
         }
-        else if (_floatButton.Visible)
+
+        if (_busy || _floatButton.IsRecording)
         {
-            _floatButton.Hide();
+            // 実行中は見えていないと止められないので残す
+            return;
         }
+        if (!_floatButton.Visible) return;
+
+        _hideTimer ??= CreateHideTimer();
+        _hideTimer.Stop();
+        _hideTimer.Start();
+    }
+
+    private System.Windows.Forms.Timer CreateHideTimer()
+    {
+        var timer = new System.Windows.Forms.Timer { Interval = 700 };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (_floatButton == null || _floatButton.IsDisposed) return;
+            if (_busy || _floatButton.IsRecording) return;
+
+            // 猶予の間に OneNote へ戻っていないか、いま一度確かめる
+            _foreground?.Refresh();
+            if (_foreground?.IsTargetForeground == true) return;
+            if (_floatButton.Visible) _floatButton.Hide();
+        };
+        return timer;
     }
 
     // ---- 音声入力 ----
@@ -260,6 +293,8 @@ public sealed class TrayContext : ApplicationContext
             _floatButton?.SetBusy(false);
             _cts?.Dispose();
             _cts = null;
+            // 実行中は消さずに残していたので、終わったところで表示条件を見直す
+            if (_foreground != null) ApplyButtonVisibility(_foreground.IsTargetForeground);
         }
     }
 
@@ -309,6 +344,7 @@ public sealed class TrayContext : ApplicationContext
         _hotkey.Dispose();
         _foreground?.Dispose();
         _recordLimitTimer?.Dispose();
+        _hideTimer?.Dispose();
         _recorder.Dispose();
         _floatButton?.Dispose();
         ClaudeSidecar.Shutdown();

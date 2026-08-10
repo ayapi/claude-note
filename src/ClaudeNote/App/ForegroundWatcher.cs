@@ -45,9 +45,18 @@ public sealed class ForegroundWatcher : IDisposable
         Update(hwnd);
     }
 
+    /// <summary>直近に前面だったプロセス名 (診断ログ用)。</summary>
+    public string LastForegroundProcess { get; private set; } = "";
+
     private void Update(IntPtr hwnd)
     {
-        var isTarget = IsTarget(hwnd);
+        var name = ProcessNameOf(hwnd);
+        var isTarget = _processNames.Any(n => string.Equals(name, n, StringComparison.OrdinalIgnoreCase));
+        if (name != LastForegroundProcess)
+        {
+            LastForegroundProcess = name;
+            Logger.Log($"前面が変わりました: {(name.Length > 0 ? name : "(不明)")} → 対象={isTarget}");
+        }
         if (isTarget == IsTargetForeground) return;
         IsTargetForeground = isTarget;
         try
@@ -60,20 +69,20 @@ public sealed class ForegroundWatcher : IDisposable
         }
     }
 
-    private bool IsTarget(IntPtr hwnd)
+    private static string ProcessNameOf(IntPtr hwnd)
     {
-        if (hwnd == IntPtr.Zero) return false;
+        if (hwnd == IntPtr.Zero) return "";
         try
         {
             GetWindowThreadProcessId(hwnd, out var pid);
-            if (pid == 0) return false;
+            if (pid == 0) return "";
             using var proc = Process.GetProcessById((int)pid);
-            return _processNames.Any(n => string.Equals(proc.ProcessName, n, StringComparison.OrdinalIgnoreCase));
+            return proc.ProcessName;
         }
         catch
         {
             // 保護されたプロセスや終了直後のプロセスは判定できない
-            return false;
+            return "";
         }
     }
 

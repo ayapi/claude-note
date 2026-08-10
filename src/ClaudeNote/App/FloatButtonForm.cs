@@ -211,6 +211,9 @@ public sealed class FloatButtonForm : Form
         }
     }
 
+    /// <summary>録音中かどうか (表示制御の判断に使う)。</summary>
+    public bool IsRecording => _recording;
+
     public void SetBusy(bool busy)
     {
         _busy = busy;
