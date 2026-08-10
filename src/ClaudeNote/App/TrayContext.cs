@@ -11,6 +11,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly NotifyIcon _icon;
     private readonly HotkeyWindow _hotkey;
     private readonly AskFlow _flow;
+    private readonly FloatButtonForm? _floatButton;
     private bool _busy;
     private DateTime _lastProgressBalloon;
 
@@ -27,6 +28,7 @@ public sealed class TrayContext : ApplicationContext
         };
 
         var menu = new ContextMenuStrip();
+        menu.Items.Add("設定ファイルを開く", null, (_, _) => OpenConfig());
         menu.Items.Add("キャプチャフォルダを開く", null, (_, _) => OpenFolder(Logger.BaseDir));
         menu.Items.Add("ログを開く", null, (_, _) => OpenFile(Logger.LogPath));
         menu.Items.Add("会話セッションをリセット", null, (_, _) =>
@@ -50,6 +52,12 @@ public sealed class TrayContext : ApplicationContext
         }
         _hotkey.HotkeyPressed += OnHotkey;
 
+        if (config.FloatButton)
+        {
+            _floatButton = new FloatButtonForm(Math.Max(config.FloatButtonSize, 32), () => OnHotkey());
+            _floatButton.Show();
+        }
+
         Logger.Log($"起動しました。ホットキー: {config.Hotkey}");
         _icon.ShowBalloonTip(2000, "ClaudeNote",
             $"常駐を開始しました。OneNote で範囲を選択して {config.Hotkey} を押してください。", ToolTipIcon.Info);
@@ -65,6 +73,7 @@ public sealed class TrayContext : ApplicationContext
         }
 
         _busy = true;
+        _floatButton?.SetBusy(true);
         var prevText = _icon.Text;
         _icon.Text = "ClaudeNote - Claude に問い合わせ中…";
         _icon.ShowBalloonTip(2000, "ClaudeNote",
@@ -84,7 +93,8 @@ public sealed class TrayContext : ApplicationContext
                     _icon.ShowBalloonTip(1500, "ClaudeNote", $"実行中: {d}", ToolTipIcon.Info);
                 }
             });
-            var preview = result.Response.Length > 80 ? result.Response[..80] + "…" : result.Response;
+            var plain = ResponseParser.StripDirectives(result.Response);
+            var preview = plain.Length > 80 ? plain[..80] + "…" : plain;
             var mode = result.Resumed ? "会話の続き" : "新規会話";
             _icon.ShowBalloonTip(3000, "ClaudeNote", $"ノートに挿入しました ({mode}):\n{preview}", ToolTipIcon.Info);
             Logger.Log($"挿入完了 ({mode}, {result.Response.Length}文字) artifacts={result.ArtifactsDir}");
@@ -103,6 +113,7 @@ public sealed class TrayContext : ApplicationContext
         {
             _icon.Text = prevText;
             _busy = false;
+            _floatButton?.SetBusy(false);
         }
     }
 
@@ -126,9 +137,28 @@ public sealed class TrayContext : ApplicationContext
         catch (Exception ex) { Logger.Log(ex); }
     }
 
+    /// <summary>実際に読み込まれている個人設定を開く (無ければテンプレートから復元)。</summary>
+    private void OpenConfig()
+    {
+        try
+        {
+            var path = AppConfig.UserConfigPath;
+            if (!File.Exists(path) && File.Exists(AppConfig.SampleConfigPath))
+            {
+                Directory.CreateDirectory(Logger.BaseDir);
+                File.Copy(AppConfig.SampleConfigPath, path);
+            }
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            _icon.ShowBalloonTip(3000, "ClaudeNote",
+                "編集後は「終了」して起動し直すと反映されます。", ToolTipIcon.Info);
+        }
+        catch (Exception ex) { Logger.Log(ex); }
+    }
+
     private void ExitApp()
     {
         _hotkey.Dispose();
+        _floatButton?.Dispose();
         ClaudeSidecar.Shutdown();
         _icon.Visible = false;
         _icon.Dispose();

@@ -32,9 +32,18 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 
 スタートアップ登録したい場合は `shell:startup` フォルダに exe のショートカットを置いてください。
 
-## 設定 (appsettings.json)
+## 設定
 
-読み込み順: `%LOCALAPPDATA%\ClaudeNote\appsettings.json`(**個人設定、あればこちらを優先**)→ exe と同じフォルダの `appsettings.json`(リポジトリのテンプレート)。個人のパス・プロンプト・プロファイルは LOCALAPPDATA 側に置くことで、リポジトリを公開しても個人情報が漏れない。
+編集するファイルは 1 つだけ:
+
+```
+%LOCALAPPDATA%\ClaudeNote\appsettings.json
+```
+
+トレイアイコン右クリック →**「設定ファイルを開く」**で開ける。初回起動時に
+`appsettings.sample.json`(リポジトリ同梱のテンプレート)からここへコピーされる。
+以後 sample を編集しても動作には影響しない — 個人のパスやプロンプトがリポジトリに
+入らないための分離。編集後はトレイの「終了」→ 再起動で反映される。
 
 | キー | 説明 |
 |---|---|
@@ -49,7 +58,33 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `engine` | `sdk` (Agent SDK サイドカー、既定) / `cli` (claude -p フォールバック) |
 | `addDirs` | 作業ディレクトリ外で読み取りを許可するフォルダ。既定は Downloads / Documents / Videos / Pictures / Desktop。環境変数展開可 |
 | `allowedTools` | Claude に自動許可するツール。既定はシェル実行込み (`Read, Glob, Grep, Bash, PowerShell, Write, Edit`)。読み取り専用に絞るなら `["Read","Glob","Grep"]` |
+| `floatButton` | 画面右下の丸ボタンを表示 (既定 true)。タップでホットキーと同じ動作。ペン/タッチ用 |
+| `floatButtonSize` | ボタンの直径 (論理px、既定 56。モニタの DPI に追従) |
 | `profiles` | **セクション名で設定を切り替えるプロファイル** (下記) |
+
+フローティングボタンはフォーカスを奪わない (`WS_EX_NOACTIVATE`) ため、OneNote の
+選択状態を保ったままペンでタップできる。処理中はスパークが回転する。
+`%LOCALAPPDATA%\ClaudeNote\button.png` を置くと既定のスパークの代わりにその画像が使われる。
+
+## 図を描く (画像 / インク)
+
+Claude の応答に次のディレクティブを書くと、その位置に図が挿入される:
+
+```
+{{image: C:\path\to\figure.png | width=200}}      画像を挿入 (width は pt、省略可)
+{{ink: 0,0 100,0 100,60 | color=#1F4E79 | width=2}}   折れ線を1本描く
+{{ink-overlay: 20,20 120,90 | color=#D40000}}     送った画像の座標のまま元のノートに重ねて描く
+```
+
+- `ink` の座標は **Claude に送ったキャプチャ画像のピクセル座標系**。`ink-overlay` は
+  その座標をページ座標に逆変換して元の選択範囲に重ねるので、**子が描いた図の上に
+  赤ペンで補助線を引く**ような添削ができる (実測誤差 0.5pt 未満)
+- `ink` の連続行はまとめて 1 つの `one:InkDrawing` になる。挿入されるのは本物の
+  インクなので、あとからペンや消しゴムで普通に編集できる
+- 正確な作図 (角度・円) は Claude 自身がスクリプトで PNG を生成して `{{image:}}` で貼る
+- 説明文はプロンプトの `{figureGuide}` に展開される (文面は設定で差し替え可)
+
+`--figure-test` で挿入と座標変換を検証できる。
 
 ## プロファイル (セクションごとの設定切り替え)
 
@@ -96,6 +131,7 @@ ClaudeNote.exe --capture-test               # いま OneNote で選択中の内�
 ClaudeNote.exe --render-test <xml> <png>    # 保存済みページ XML の全 ink を PNG 化
 ClaudeNote.exe --ask-test <png> [sessionId] # PNG を Claude に送って応答を表示のみ (sessionId 指定で resume 検証)
 ClaudeNote.exe --insert-test                # テストページ作成→挿入→検証→削除
+ClaudeNote.exe --figure-test                # 図 (画像+インク+補助線) の挿入と座標変換を検証
 ```
 
 ログ: `%LOCALAPPDATA%\ClaudeNote\claude-note.log`
@@ -111,7 +147,9 @@ ClaudeNote.exe --insert-test                # テストページ作成→挿入�
             → one:Position (pt 座標) に基づき合成、透明 PNG (約192dpi)
             → Claude Agent SDK (常駐 node サイドカー。allowedTools は設定で制御、
                既定はシェル実行込み。additionalDirectories=addDirs で cwd 外の資料も読める)
-            → 応答を one:Outline として選択範囲の真下に UpdatePageContent で挿入
+            → 応答を解析し、テキストは one:Outline、{{image:}} は one:Image、
+               {{ink:}} は折れ線→ISF 変換して one:InkDrawing として
+               選択範囲の真下に UpdatePageContent で挿入
 ```
 
 サイドカー (`sidecar/index.mjs`) は stdin/stdout の JSON Lines で C# 側と通信する常駐

@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using System.Xml.Linq;
 
 namespace ClaudeNote;
@@ -146,32 +148,173 @@ public static class PageXml
     }
 
     /// <summary>応答テキストを選択範囲の真下に挿入するための UpdatePageContent 用 XML を組み立てる。</summary>
-    public static string BuildResponseXml(string pageId, Rect anchorPt, string responseText, string colorHex)
+    public static string BuildResponseXml(string pageId, Rect anchorPt, string responseText, string colorHex) =>
+        BuildResponseXml(pageId, anchorPt, [new TextPart(responseText)], colorHex, null);
+
+    /// <summary>
+    /// テキスト・画像・インクが混在した応答を、選択範囲の真下に配置する XML を組み立てる。
+    /// ink-overlay は選択範囲そのものに重ねる (補助線)。
+    /// </summary>
+    /// <param name="captureMap">
+    /// キャプチャ画像のピクセル座標 → ページ座標 (pt) の変換。インク指定に使う。null ならインクは無視。
+    /// </param>
+    public static string BuildResponseXml(string pageId, Rect anchorPt, IReadOnlyList<ResponsePart> parts,
+        string colorHex, CaptureMap? captureMap)
     {
         var inv = CultureInfo.InvariantCulture;
         var x = Math.Max(anchorPt.X, 0);
-        var y = anchorPt.Bottom + 12;
+        var cursorY = anchorPt.Bottom + 12;
         var width = Math.Max(anchorPt.Width, 240);
-
-        var lines = responseText.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var oes = lines.Select(line =>
-            new XElement(One + "OE",
-                new XElement(One + "T", new XCData(WrapLine(line, colorHex)))));
 
         var pageEl = new XElement(One + "Page",
             new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName),
-            new XAttribute("ID", pageId),
-            new XElement(One + "Outline",
+            new XAttribute("ID", pageId));
+
+        // 連続するテキストは1つのアウトラインにまとめる
+        var textBuffer = new List<string>();
+        void FlushText()
+        {
+            if (textBuffer.Count == 0) return;
+            var oes = textBuffer.Select(line =>
+                new XElement(One + "OE",
+                    new XElement(One + "T", new XCData(WrapLine(line, colorHex)))));
+            pageEl.Add(new XElement(One + "Outline",
                 new XElement(One + "Position",
                     new XAttribute("x", x.ToString("0.##", inv)),
-                    new XAttribute("y", y.ToString("0.##", inv))),
+                    new XAttribute("y", cursorY.ToString("0.##", inv))),
                 new XElement(One + "Size",
                     new XAttribute("width", width.ToString("0.##", inv)),
                     new XAttribute("height", "20"),
                     new XAttribute("isSetByUser", "true")),
                 new XElement(One + "OEChildren", oes)));
+            // 行数から高さを見積もってカーソルを進める (OneNote が実寸に再配置する)
+            cursorY += textBuffer.Count * 14 + 12;
+            textBuffer.Clear();
+        }
+
+        foreach (var part in parts)
+        {
+            switch (part)
+            {
+                case TextPart t:
+                    textBuffer.AddRange(t.Text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'));
+                    break;
+
+                case ImagePart img:
+                    FlushText();
+                    if (AppendImage(pageEl, img, x, cursorY, out var imgHeight))
+                        cursorY += imgHeight + 12;
+                    break;
+
+                case InkPart ink when captureMap != null:
+                    FlushText();
+                    if (ink.Overlay)
+                    {
+                        AppendInk(pageEl, ink, captureMap, overlayOrigin: true, x, cursorY, out _);
+                    }
+                    else if (AppendInk(pageEl, ink, captureMap, overlayOrigin: false, x, cursorY, out var inkHeight))
+                    {
+                        cursorY += inkHeight + 12;
+                    }
+                    break;
+            }
+        }
+        FlushText();
 
         return pageEl.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static bool AppendImage(XElement pageEl, ImagePart img, double x, double y, out double heightPt)
+    {
+        heightPt = 0;
+        try
+        {
+            var path = Environment.ExpandEnvironmentVariables(img.Path);
+            if (!File.Exists(path))
+            {
+                Logger.Log($"画像が見つかりません (無視): {path}");
+                return false;
+            }
+            var bytes = File.ReadAllBytes(path);
+            using var ms = new MemoryStream(bytes);
+            var frame = BitmapDecoder.Create(ms, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];
+
+            // 画像は 96dpi の DIP として扱い pt に変換 (1pt = 96/72 DIP)
+            var naturalWidthPt = frame.PixelWidth * 72.0 / 96.0;
+            var naturalHeightPt = frame.PixelHeight * 72.0 / 96.0;
+            var widthPt = img.WidthPt ?? Math.Min(naturalWidthPt, 400);
+            heightPt = naturalWidthPt > 0 ? widthPt * (naturalHeightPt / naturalWidthPt) : naturalHeightPt;
+
+            var inv = CultureInfo.InvariantCulture;
+            var format = Path.GetExtension(path).Trim('.').ToLowerInvariant() switch
+            {
+                "jpg" or "jpeg" => "jpg",
+                "gif" => "gif",
+                "bmp" => "bmp",
+                _ => "png",
+            };
+            pageEl.Add(new XElement(One + "Image",
+                new XAttribute("format", format),
+                new XElement(One + "Position",
+                    new XAttribute("x", x.ToString("0.##", inv)),
+                    new XAttribute("y", y.ToString("0.##", inv))),
+                new XElement(One + "Size",
+                    new XAttribute("width", widthPt.ToString("0.##", inv)),
+                    new XAttribute("height", heightPt.ToString("0.##", inv)),
+                    new XAttribute("isSetByUser", "true")),
+                new XElement(One + "Data", Convert.ToBase64String(bytes))));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"画像の挿入に失敗 (無視): {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool AppendInk(XElement pageEl, InkPart ink, CaptureMap map, bool overlayOrigin,
+        double flowX, double flowY, out double heightPt)
+    {
+        heightPt = 0;
+        try
+        {
+            var isf = InkBuilder.BuildIsf(ink.Strokes);
+            if (isf == null) return false;
+
+            // ISF 内部座標 (= キャプチャのピクセル座標) の外接矩形を pt に変換
+            var boundsPx = InkBuilder.GetBounds(isf);
+            var widthPt = boundsPx.Width / map.PxPerPt;
+            heightPt = boundsPx.Height / map.PxPerPt;
+
+            double posX, posY;
+            if (overlayOrigin)
+            {
+                // 補助線: キャプチャ画像上の座標をそのまま元の選択範囲の位置へ戻す
+                posX = map.OriginXPt + (boundsPx.X - map.PadPx) / map.PxPerPt;
+                posY = map.OriginYPt + (boundsPx.Y - map.PadPx) / map.PxPerPt;
+            }
+            else
+            {
+                posX = flowX;
+                posY = flowY;
+            }
+
+            var inv = CultureInfo.InvariantCulture;
+            pageEl.Add(new XElement(One + "InkDrawing",
+                new XElement(One + "Position",
+                    new XAttribute("x", Math.Max(posX, 0).ToString("0.##", inv)),
+                    new XAttribute("y", Math.Max(posY, 0).ToString("0.##", inv))),
+                new XElement(One + "Size",
+                    new XAttribute("width", Math.Max(widthPt, 1).ToString("0.##", inv)),
+                    new XAttribute("height", Math.Max(heightPt, 1).ToString("0.##", inv))),
+                new XElement(One + "Data", Convert.ToBase64String(isf))));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"インクの挿入に失敗 (無視): {ex.Message}");
+            return false;
+        }
     }
 
     private static string WrapLine(string line, string colorHex)

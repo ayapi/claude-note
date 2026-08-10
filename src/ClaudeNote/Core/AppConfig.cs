@@ -136,6 +136,34 @@ public sealed class AppConfig
         "{textSection}",
     ];
 
+    /// <summary>
+    /// 図の描き方の説明。プロンプトに {figureGuide} と書くとここが展開される。
+    /// 各プロンプトに同じ説明を重複させないための共通ブロック。
+    /// </summary>
+    [JsonPropertyName("figureGuide")]
+    public string[] FigureGuide { get; set; } =
+    [
+        "図やインクをノートに描けます。応答の中に次の行を書くと、その位置に挿入されます:",
+        "  {{image: <PNGの絶対パス> | width=200}}   … 図の画像を挿入 (width は省略可、単位はpt)",
+        "  {{ink: 0,0 100,0 100,60 | color=#1F4E79 | width=2}}   … 折れ線を1本描く (点は x,y をスペース区切り)",
+        "  {{ink-overlay: 20,20 120,90 | color=#D40000}}   … 送られた画像の座標系のまま、元のノートに重ねて描く (赤ペンの添削・補助線)",
+        "ルール:",
+        "- ink の座標は送られた画像のピクセル座標系。ink-overlay は画像上で見えている位置にそのまま重なる",
+        "- ink の連続する行はまとめて1つの図になる。線分図・面積図・矢印はこれで描く",
+        "- 正確な作図 (角度・長さ・円) が要るときは、自分で計算して PNG を作り {{image:}} で貼る",
+        "- 図は説明の補助。まず言葉で1個教えて、必要なときだけ描く",
+    ];
+
+    public string FigureGuideText => string.Join("\n", FigureGuide);
+
+    /// <summary>画面右下のフローティングボタンを表示するか。</summary>
+    [JsonPropertyName("floatButton")]
+    public bool FloatButton { get; set; } = true;
+
+    /// <summary>フローティングボタンの直径 (px)。</summary>
+    [JsonPropertyName("floatButtonSize")]
+    public int FloatButtonSize { get; set; } = 56;
+
     /// <summary>セクション名で切り替える設定プロファイル。上から順に評価し最初の一致を適用。</summary>
     [JsonPropertyName("profiles")]
     public ConfigProfile[] Profiles { get; set; } = [];
@@ -167,6 +195,9 @@ public sealed class AppConfig
             Engine = Engine,
             NodePath = NodePath,
             SidecarDir = SidecarDir,
+            FigureGuide = FigureGuide,
+            FloatButton = FloatButton,
+            FloatButtonSize = FloatButtonSize,
             AllowedTools = profile.AllowedTools ?? AllowedTools,
             AddDirs = profile.AddDirs ?? AddDirs,
             PromptTemplate = profile.PromptTemplate ?? PromptTemplate,
@@ -183,17 +214,36 @@ public sealed class AppConfig
         return Regex.IsMatch(value, regex, RegexOptions.IgnoreCase);
     }
 
+    /// <summary>実際に編集すべき個人設定のパス。</summary>
+    public static string UserConfigPath => Path.Combine(Logger.BaseDir, "appsettings.json");
+
+    /// <summary>exe に同梱されたテンプレート (appsettings.sample.json)。初回の雛形。</summary>
+    public static string SampleConfigPath => Path.Combine(AppContext.BaseDirectory, "appsettings.sample.json");
+
     /// <summary>
-    /// 設定を読み込む。%LOCALAPPDATA%\ClaudeNote\appsettings.json (個人設定) があれば
-    /// そちらを優先し、無ければ exe 隣の appsettings.json (テンプレート) を使う。
-    /// 個人のパスやプロンプトをリポジトリに置かないための分離。
+    /// 設定を読み込む。%LOCALAPPDATA%\ClaudeNote\appsettings.json (個人設定) を使い、
+    /// 無ければ同梱テンプレートをそこにコピーしてから読む。
+    /// 以降ユーザーが編集する場所は常に 1 箇所だけになる。
     /// </summary>
     public static AppConfig LoadDefault()
     {
-        var userPath = Path.Combine(Logger.BaseDir, "appsettings.json");
-        var path = File.Exists(userPath)
-            ? userPath
-            : Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var userPath = UserConfigPath;
+        if (!File.Exists(userPath) && File.Exists(SampleConfigPath))
+        {
+            try
+            {
+                Directory.CreateDirectory(Logger.BaseDir);
+                File.Copy(SampleConfigPath, userPath);
+                Logger.Log($"個人設定を作成しました: {userPath}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"個人設定の作成に失敗、テンプレートを直接使用します: {ex.Message}");
+                Logger.Log($"設定ファイル: {SampleConfigPath}");
+                return Load(SampleConfigPath);
+            }
+        }
+        var path = File.Exists(userPath) ? userPath : SampleConfigPath;
         Logger.Log($"設定ファイル: {path}");
         return Load(path);
     }

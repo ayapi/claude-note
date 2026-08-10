@@ -88,7 +88,10 @@ public sealed class AskFlow
             store!.Update(scopeKey, result.SessionId!);
 
         var anchor = sel.BoundsPt ?? sel.FallbackBoundsPt ?? new Rect(72, 72, 240, 20);
-        var updateXml = PageXml.BuildResponseXml(pageId, anchor, result.Text, cfg.ResponseColor);
+        var parts = ResponseParser.Parse(result.Text);
+        var figures = parts.Count(p => p is ImagePart or InkPart);
+        if (figures > 0) Logger.Log($"応答に図が {figures} 個含まれています");
+        var updateXml = PageXml.BuildResponseXml(pageId, anchor, parts, cfg.ResponseColor, render?.Map);
         onenote.UpdatePage(updateXml);
 
         if (cfg.KeepArtifacts)
@@ -119,10 +122,13 @@ public sealed class AskFlow
             var template = resumed ? cfg.ResumePromptTemplateText : cfg.PromptTemplateText;
             return template
                 .Replace("{image}", render.PngPath)
+                .Replace("{figureGuide}", cfg.FigureGuideText)
                 .Replace("{textSection}", textSection);
         }
         if (!string.IsNullOrWhiteSpace(sel.Text))
-            return cfg.TextOnlyPromptTemplateText.Replace("{text}", sel.Text);
+            return cfg.TextOnlyPromptTemplateText
+                .Replace("{figureGuide}", cfg.FigureGuideText)
+                .Replace("{text}", sel.Text);
 
         throw new UserFacingException("選択範囲から読み取れる内容がありませんでした。");
     }

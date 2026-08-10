@@ -2,3 +2,6 @@ bin/
 obj/
 node_modules/
 *.user
+
+# 個人的な調査メモ・下書き (公開しない)
+docs/

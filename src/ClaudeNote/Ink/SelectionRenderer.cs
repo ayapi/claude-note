@@ -6,7 +6,14 @@ using System.Windows.Media.Imaging;
 
 namespace ClaudeNote;
 
-public sealed record RenderResult(string PngPath, int WidthPx, int HeightPx, int InkCount, int SkippedInk, int ImageCount);
+/// <summary>
+/// キャプチャ画像のピクセル座標 ↔ ページ座標 (pt) の対応。
+/// Claude が画像上の座標で指した位置を、元のノート上の位置へ戻すために使う。
+/// </summary>
+public sealed record CaptureMap(double OriginXPt, double OriginYPt, double PxPerPt, double PadPx);
+
+public sealed record RenderResult(
+    string PngPath, int WidthPx, int HeightPx, int InkCount, int SkippedInk, int ImageCount, CaptureMap Map);
 
 /// <summary>
 /// 選択された ink (ISF) と画像を、ページ座標 (pt) に基づいて合成し透明 PNG に描画する。
@@ -135,6 +142,7 @@ public static class SelectionRenderer
         using (var fs = File.Create(outPath))
             encoder.Save(fs);
 
-        return new RenderResult(outPath, widthPx, heightPx, positioned.Count, skipped, images.Count);
+        var map = new CaptureMap(bounds.X, bounds.Y, pxPerPt, PadPx);
+        return new RenderResult(outPath, widthPx, heightPx, positioned.Count, skipped, images.Count, map);
     }
 }
