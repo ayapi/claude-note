@@ -33,7 +33,9 @@ public sealed class FloatButtonForm : Form
     private bool _busy;
     private bool _hover;
     private bool _recording;
+    private bool _pressed;
     private bool _longPressFired;
+    private DateTime _lastPointerAt = DateTime.MinValue;
     private float _angle;
     private float _pulse;
 
@@ -109,23 +111,81 @@ public sealed class FloatButtonForm : Form
     protected override bool ShowWithoutActivation => true;
 
     // ペン/タッチの「長押し = 右クリック」ジェスチャを無効化する。
-    // 既定のままだと押しっぱなしが右クリックに化けて左ボタンが押しっぱなしにならず、
-    // 長押し (録音) が成立しない。
     private const int WmTabletQuerySystemGestureStatus = 0x02CC;
     private const int TabletDisablePressAndHold = 0x00000001;
     private const int TabletDisablePenTapFeedback = 0x00000008;
     private const int TabletDisablePenBarrelFeedback = 0x00000010;
     private const int TabletDisableFlicks = 0x00010000;
 
+    // ペン/タッチのマウス互換メッセージは「指を離した時に押下と解放がまとめて」届くため、
+    // それでは長押しを判定できない。ポインタメッセージを直接受けて実際の押下/解放の
+    // タイミングを取る。処理したポインタメッセージは既定処理に渡さず、
+    // マウス互換メッセージへの変換を止める (二重処理の防止)。
+    private const int WmPointerDown = 0x0246;
+    private const int WmPointerUp = 0x0247;
+    private const int WmPointerCaptureChanged = 0x024C;
+
     protected override void WndProc(ref Message m)
     {
-        if (m.Msg == WmTabletQuerySystemGestureStatus)
+        switch (m.Msg)
         {
-            m.Result = TabletDisablePressAndHold | TabletDisablePenTapFeedback
-                | TabletDisablePenBarrelFeedback | TabletDisableFlicks;
-            return;
+            case WmTabletQuerySystemGestureStatus:
+                m.Result = TabletDisablePressAndHold | TabletDisablePenTapFeedback
+                    | TabletDisablePenBarrelFeedback | TabletDisableFlicks;
+                return;
+
+            case WmPointerDown:
+                _lastPointerAt = DateTime.Now;
+                BeginPress("ペン/タッチ (ポインタ)");
+                m.Result = IntPtr.Zero;
+                return;
+
+            case WmPointerUp:
+                _lastPointerAt = DateTime.Now;
+                EndPress();
+                m.Result = IntPtr.Zero;
+                return;
+
+            case WmPointerCaptureChanged:
+                // 途中でキャプチャを奪われた場合に録音が止まらなくなるのを防ぐ
+                if (_pressed)
+                {
+                    Logger.Log("ボタン: ポインタのキャプチャが外れました");
+                    EndPress();
+                }
+                break;
         }
         base.WndProc(ref m);
+    }
+
+    /// <summary>押下の開始。ポインタとマウスのどちらから来ても 1 回だけ処理する。</summary>
+    private void BeginPress(string source)
+    {
+        if (_pressed) return;
+        _pressed = true;
+        _longPressFired = false;
+        Logger.Log($"ボタン押下: 入力={source} 長押し={(_longPressTimer != null ? "有効" : "無効")} busy={_busy}");
+        // 処理中は長押しを受け付けない (タップ = キャンセルのみ)
+        if (!_busy) _longPressTimer?.Start();
+    }
+
+    /// <summary>押下の終了。長押し中なら録音終了、そうでなければタップ。</summary>
+    private void EndPress()
+    {
+        if (!_pressed) return;
+        _pressed = false;
+        _longPressTimer?.Stop();
+
+        if (_longPressFired)
+        {
+            _longPressFired = false;
+            SetRecording(false);
+            Logger.Log("ボタン解放: 長押し終了 (録音停止)");
+            LongPressEnded?.Invoke();
+            return;
+        }
+        Logger.Log("ボタン解放: タップ");
+        _onTap();
     }
 
     /// <summary>直近の入力がペン/タッチ由来かを判定する (診断ログ用)。</summary>
@@ -169,30 +229,19 @@ public sealed class FloatButtonForm : Form
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        Logger.Log($"ボタン MouseDown: button={e.Button} 入力={InputSource()} 長押し={(_longPressTimer != null ? "有効" : "無効")} busy={_busy}");
-        if (e.Button != MouseButtons.Left) return;
-        _longPressFired = false;
-        // 処理中は長押しを受け付けない (タップ = キャンセルのみ)
-        if (!_busy) _longPressTimer?.Start();
+        if (e.Button != MouseButtons.Left || IsPointerEcho()) return;
+        BeginPress(InputSource());
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        Logger.Log($"ボタン MouseUp: button={e.Button} 長押し発火={_longPressFired}");
-        if (e.Button != MouseButtons.Left) return;
-        _longPressTimer?.Stop();
-
-        if (_longPressFired)
-        {
-            _longPressFired = false;
-            SetRecording(false);
-            LongPressEnded?.Invoke();
-            return;
-        }
-        // 短いタップ。処理中ならキャンセルを意味する。判断は呼び出し側 (TrayContext) が行う
-        _onTap();
+        if (e.Button != MouseButtons.Left || IsPointerEcho()) return;
+        EndPress();
     }
+
+    /// <summary>直前にポインタで処理済みなら、遅れて届くマウス互換メッセージは無視する。</summary>
+    private bool IsPointerEcho() => (DateTime.Now - _lastPointerAt).TotalMilliseconds < 800;
 
     private void SetRecording(bool recording)
     {
