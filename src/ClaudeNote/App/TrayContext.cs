@@ -7,7 +7,7 @@ namespace ClaudeNote;
 
 public sealed class TrayContext : ApplicationContext
 {
-    private readonly AppConfig _config;
+    private readonly ConfigStore _store;
     private readonly NotifyIcon _icon;
     private readonly HotkeyWindow _hotkey;
     private readonly AskFlow _flow;
@@ -20,10 +20,14 @@ public sealed class TrayContext : ApplicationContext
     private bool _busy;
     private DateTime _lastProgressBalloon;
 
-    public TrayContext(AppConfig config)
+    /// <summary>常に最新の設定 (実行のたびに読み直される)。</summary>
+    private AppConfig _config => _store.Current;
+
+    public TrayContext(ConfigStore store)
     {
-        _config = config;
-        _flow = new AskFlow(config);
+        _store = store;
+        var config = store.Current;
+        _flow = new AskFlow(() => _store.Current);
 
         _icon = new NotifyIcon
         {
@@ -131,6 +135,7 @@ public sealed class TrayContext : ApplicationContext
             _icon.ShowBalloonTip(1500, "ClaudeNote", "処理中は録音できません。", ToolTipIcon.Warning);
             return;
         }
+        RefreshConfig();
         try
         {
             var wav = Path.Combine(Path.GetTempPath(), $"claudenote-voice-{DateTime.Now:yyyyMMddHHmmss}.wav");
@@ -229,9 +234,26 @@ public sealed class TrayContext : ApplicationContext
             return;
         }
 
+        RefreshConfig();
         await RunAsync(
             flow: (onProgress, ct) => _flow.RunAsync(onProgress, ct),
             startMessage: "受け付けました。選択内容をキャプチャして Claude に送ります…");
+    }
+
+    /// <summary>
+    /// 設定ファイルが編集されていれば読み直す。プロンプトの調整が再起動なしで反映される。
+    /// 再起動が要る項目が変わっていた場合はその旨を通知する。
+    /// </summary>
+    private void RefreshConfig()
+    {
+        var notice = _store.RefreshIfChanged();
+        // 長押しの設定は実行中でも反映できる
+        _floatButton?.SetLongPress(_config.VoiceInput ? _config.LongPressMs : 0);
+        if (notice != null)
+        {
+            Logger.Log(notice);
+            _icon.ShowBalloonTip(4000, "ClaudeNote", notice, ToolTipIcon.Warning);
+        }
     }
 
     /// <summary>

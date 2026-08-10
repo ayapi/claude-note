@@ -13,9 +13,12 @@ public sealed record AskResult(string Response, string? PngPath, string Artifact
 /// </summary>
 public sealed class AskFlow
 {
-    private readonly AppConfig _config;
+    private readonly Func<AppConfig> _configProvider;
 
-    public AskFlow(AppConfig config) => _config = config;
+    /// <summary>設定は実行のたびに取得する (編集がすぐ反映されるようにするため)。</summary>
+    public AskFlow(Func<AppConfig> configProvider) => _configProvider = configProvider;
+
+    private AppConfig _config => _configProvider();
 
     private static string ResolveWorkspace(AppConfig cfg) =>
         string.IsNullOrWhiteSpace(cfg.WorkspaceDir)

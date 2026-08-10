@@ -27,7 +27,8 @@ public sealed class FloatButtonForm : Form
 
     private readonly Action _onTap;
     private readonly System.Windows.Forms.Timer _spinTimer;
-    private readonly System.Windows.Forms.Timer? _longPressTimer;
+    private readonly System.Windows.Forms.Timer _longPressTimer;
+    private bool _longPressEnabled;
     private readonly Image? _customImage;
     private readonly int _logicalSize;
     private bool _busy;
@@ -49,17 +50,15 @@ public sealed class FloatButtonForm : Form
     {
         _onTap = onTap;
         _logicalSize = size;
-        if (longPressMs > 0)
+        _longPressTimer = new System.Windows.Forms.Timer();
+        _longPressTimer.Tick += (_, _) =>
         {
-            _longPressTimer = new System.Windows.Forms.Timer { Interval = longPressMs };
-            _longPressTimer.Tick += (_, _) =>
-            {
-                _longPressTimer.Stop();
-                _longPressFired = true;
-                SetRecording(true);
-                LongPressStarted?.Invoke();
-            };
-        }
+            _longPressTimer.Stop();
+            _longPressFired = true;
+            SetRecording(true);
+            LongPressStarted?.Invoke();
+        };
+        SetLongPress(longPressMs);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
@@ -164,9 +163,9 @@ public sealed class FloatButtonForm : Form
         if (_pressed) return;
         _pressed = true;
         _longPressFired = false;
-        Logger.Log($"ボタン押下: 入力={source} 長押し={(_longPressTimer != null ? "有効" : "無効")} busy={_busy}");
+        Logger.Log($"ボタン押下: 入力={source} 長押し={(_longPressEnabled ? "有効" : "無効")} busy={_busy}");
         // 処理中は長押しを受け付けない (タップ = キャンセルのみ)
-        if (!_busy) _longPressTimer?.Start();
+        if (!_busy && _longPressEnabled) _longPressTimer.Start();
     }
 
     /// <summary>押下の終了。長押し中なら録音終了、そうでなければタップ。</summary>
@@ -174,7 +173,7 @@ public sealed class FloatButtonForm : Form
     {
         if (!_pressed) return;
         _pressed = false;
-        _longPressTimer?.Stop();
+        _longPressTimer.Stop();
 
         if (_longPressFired)
         {
@@ -213,6 +212,14 @@ public sealed class FloatButtonForm : Form
 
     /// <summary>録音中かどうか (表示制御の判断に使う)。</summary>
     public bool IsRecording => _recording;
+
+    /// <summary>長押しの判定時間を変更する。0 以下なら音声入力を無効にする (設定の再読み込み用)。</summary>
+    public void SetLongPress(int longPressMs)
+    {
+        _longPressEnabled = longPressMs > 0;
+        if (_longPressEnabled) _longPressTimer.Interval = Math.Max(longPressMs, 150);
+        else _longPressTimer.Stop();
+    }
 
     public void SetBusy(bool busy)
     {
@@ -360,7 +367,7 @@ public sealed class FloatButtonForm : Form
         if (disposing)
         {
             _spinTimer.Dispose();
-            _longPressTimer?.Dispose();
+            _longPressTimer.Dispose();
             _customImage?.Dispose();
         }
         base.Dispose(disposing);

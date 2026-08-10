@@ -8,10 +8,10 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        var config = AppConfig.LoadDefault();
+        var store = new ConfigStore();
 
         if (args.Length > 0)
-            return DebugCommands.Run(args, config);
+            return DebugCommands.Run(args, store.Current);
 
         using var mutex = new Mutex(initiallyOwned: true, "ClaudeNote-SingleInstance", out var isNew);
         if (!isNew)
@@ -22,7 +22,7 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayContext(config));
+        Application.Run(new TrayContext(store));
         return 0;
     }
 }

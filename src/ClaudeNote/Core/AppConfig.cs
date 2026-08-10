@@ -308,6 +308,25 @@ public sealed class AppConfig
     /// <summary>exe に同梱されたテンプレート (appsettings.sample.json)。初回の雛形。</summary>
     public static string SampleConfigPath => Path.Combine(AppContext.BaseDirectory, "appsettings.sample.json");
 
+    /// <summary>実際に読み込まれる設定ファイル。</summary>
+    public static string EffectiveConfigPath =>
+        File.Exists(UserConfigPath) ? UserConfigPath : SampleConfigPath;
+
+    /// <summary>
+    /// 設定を読み込む。壊れていれば例外を投げる。
+    /// 再読み込み時に既定値へ黙って戻ってしまうのを防ぐため、起動時の Load とは分けている。
+    /// </summary>
+    public static AppConfig LoadStrict(string path)
+    {
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        }) ?? throw new InvalidOperationException("設定が空です。");
+    }
+
     /// <summary>
     /// 設定を読み込む。%LOCALAPPDATA%\ClaudeNote\appsettings.json (個人設定) を使い、
     /// 無ければ同梱テンプレートをそこにコピーしてから読む。
