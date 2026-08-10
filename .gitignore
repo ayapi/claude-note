@@ -5,3 +5,9 @@ node_modules/
 
 # 個人的な調査メモ・下書き (公開しない)
 docs/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
