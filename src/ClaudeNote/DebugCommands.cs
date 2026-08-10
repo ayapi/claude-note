@@ -44,6 +44,8 @@ internal static class DebugCommands
                     return VoiceInsertTest(config);
                 case "--cancel-test":
                     return CancelTest(config);
+                case "--selection-test":
+                    return SelectionTest(args[1]);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -108,6 +110,14 @@ internal static class DebugCommands
         Console.WriteLine($"session_id: {result.SessionId}");
         Console.WriteLine("---- Claude 応答 ----");
         Console.WriteLine(result.Text);
+        return 0;
+    }
+
+    /// <summary>保存したページ XML に対して選択判定だけを走らせる (回帰テスト用)。</summary>
+    private static int SelectionTest(string xmlPath)
+    {
+        var sel = PageXml.ParseSelection(File.ReadAllText(xmlPath));
+        Console.WriteLine($"ink={sel.Ink.Count} images={sel.Images.Count} textLen={sel.Text.Length} bounds={sel.BoundsPt}");
         return 0;
     }
 

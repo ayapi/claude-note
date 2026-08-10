@@ -53,7 +53,11 @@ public static class PageXml
             if (el.Ancestors(One + "Title").Any()) continue;
 
             var name = el.Name.LocalName;
-            var isSelected = !selectedOnly || IsSelected(el) || el.Ancestors().Any(IsSelected);
+            // selected="all" は「配下すべてが選択」を意味するので子孫へ波及させる。
+            // selected="partial" は「配下の一部が選択」なので波及させない。
+            // (ページ上にカーソルがあるだけで Page が partial になるため、
+            //  波及させるとページ全体が選択扱いになってしまう)
+            var isSelected = !selectedOnly || IsSelected(el) || el.Ancestors().Any(IsSelectedAll);
 
             switch (name)
             {
@@ -84,11 +88,15 @@ public static class PageXml
         return sel;
     }
 
+    /// <summary>この要素自体が選択に含まれるか (一部選択も含む)。</summary>
     private static bool IsSelected(XElement el)
     {
         var s = (string?)el.Attribute("selected");
         return s is "all" or "partial";
     }
+
+    /// <summary>配下すべてが選択されているか。子孫へ選択を波及させてよいのはこの場合だけ。</summary>
+    private static bool IsSelectedAll(XElement el) => (string?)el.Attribute("selected") == "all";
 
     private static byte[]? ReadData(XElement el)
     {
@@ -125,8 +133,9 @@ public static class PageXml
         // ink/画像に位置が無い、またはテキストのみの選択: 選択要素を含む Outline の矩形を使う
         foreach (var outline in page.Elements(One + "Outline"))
         {
+            // partial なアウトラインは、実際に選択された子孫を持つ場合だけ対象にする
             var contains = !selectedOnly
-                || IsSelected(outline)
+                || IsSelectedAll(outline)
                 || outline.Descendants().Any(IsSelected);
             if (!contains) continue;
             if (ReadRect(outline) is Rect r)
