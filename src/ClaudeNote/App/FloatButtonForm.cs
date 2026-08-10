@@ -28,6 +28,7 @@ public sealed class FloatButtonForm : Form
     private readonly Action _onTap;
     private readonly System.Windows.Forms.Timer _spinTimer;
     private readonly System.Windows.Forms.Timer _longPressTimer;
+    private readonly ToolTip _tip = new() { InitialDelay = 300, ReshowDelay = 100 };
     private bool _longPressEnabled;
     private readonly Image? _customImage;
     private readonly int _logicalSize;
@@ -59,6 +60,7 @@ public sealed class FloatButtonForm : Form
             LongPressStarted?.Invoke();
         };
         SetLongPress(longPressMs);
+        UpdateTip();
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
@@ -219,6 +221,20 @@ public sealed class FloatButtonForm : Form
         _longPressEnabled = longPressMs > 0;
         if (_longPressEnabled) _longPressTimer.Interval = Math.Max(longPressMs, 150);
         else _longPressTimer.Stop();
+        UpdateTip();
+    }
+
+    /// <summary>いまの状態と、押すと何が起きるかを説明する。</summary>
+    private void UpdateTip()
+    {
+        var text = _recording
+            ? "録音中… 指を離すと文字起こしして送ります"
+            : _busy
+                ? "Claude が考えています。押すと中断します"
+                : _longPressEnabled
+                    ? "タップ: 選択範囲を送る / 長押し: 音声で質問"
+                    : "タップ: 選択範囲を送る";
+        _tip.SetToolTip(this, text);
     }
 
     public void SetBusy(bool busy)
@@ -233,6 +249,7 @@ public sealed class FloatButtonForm : Form
             _spinTimer.Stop();
             _angle = 0;
         }
+        UpdateTip();
         Invalidate();
     }
 
@@ -259,6 +276,7 @@ public sealed class FloatButtonForm : Form
         if (recording) _spinTimer.Start();
         else if (!_busy) _spinTimer.Stop();
         _pulse = 0;
+        UpdateTip();
         Invalidate();
     }
 
@@ -368,6 +386,7 @@ public sealed class FloatButtonForm : Form
         {
             _spinTimer.Dispose();
             _longPressTimer.Dispose();
+            _tip.Dispose();
             _customImage?.Dispose();
         }
         base.Dispose(disposing);

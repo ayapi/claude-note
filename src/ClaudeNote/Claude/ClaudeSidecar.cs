@@ -47,22 +47,6 @@ public sealed class ClaudeSidecar : IDisposable
             Logger.Log($"sidecar 要求 #{id} (resume={resumeSessionId ?? "なし"}, cwd={cwd}, addDirs={addDirs.Length})");
             await WriteLineAsync(proc, requestJson, ct);
 
-            // キャンセル時はサイドカーにも中断を伝える (SDK の abortController が発火する)。
-            // 中断後に届く応答行は id 不一致として次の要求で読み飛ばされる。
-            using var cancelReg = ct.Register(() =>
-            {
-                try
-                {
-                    var json = JsonSerializer.Serialize(new { id, cancel = true });
-                    WriteLineAsync(proc, json, CancellationToken.None).GetAwaiter().GetResult();
-                    Logger.Log($"sidecar へキャンセルを送信 #{id}");
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"キャンセル送信に失敗: {ex.Message}");
-                }
-            });
-
             var idle = TimeSpan.FromSeconds(Math.Max(config.TimeoutSeconds, 30));
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(idle);
@@ -94,12 +78,77 @@ public sealed class ClaudeSidecar : IDisposable
                 throw new UserFacingException(
                     $"Claude から {(int)idle.TotalSeconds} 秒間なにも進行イベントが届かなかったため、無応答とみなして中断しました。");
             }
-            // ct によるキャンセルは OperationCanceledException のまま呼び出し側へ伝える
-            // (サイドカーは再起動しない。中断済みの応答行は id 不一致で読み飛ばされる)
+            catch (OperationCanceledException)
+            {
+                // ユーザーによるキャンセル。ここで確実にサイドカーへ伝える。
+                // (以前は CancellationToken.Register から送っていたが、登録の破棄と
+                //  競合して送信されないことがあり、中断できなかった要求が走り続けて
+                //  次の要求と同じセッションで衝突していた)
+                await AbortOnSidecarAsync(proc, id);
+                throw;
+            }
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// サイドカーに中断を伝え、その要求が終わったことを確認する。
+    /// 一定時間内に確認できなければサイドカーを作り直す。走り続けている要求を残したまま
+    /// 次の要求を投げると、同じセッションを取り合って応答が返らなくなるため。
+    /// </summary>
+    private async Task AbortOnSidecarAsync(Process proc, string id)
+    {
+        try
+        {
+            await WriteLineAsync(proc, JsonSerializer.Serialize(new { id, cancel = true }), CancellationToken.None);
+            Logger.Log($"sidecar へキャンセルを送信 #{id}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"キャンセル送信に失敗、サイドカーを作り直します: {ex.Message}");
+            Restart();
+            return;
+        }
+
+        // 中断の完了 (= その id の最終応答) を待って読み捨てる
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (true)
+            {
+                var line = await proc.StandardOutput.ReadLineAsync(wait.Token);
+                if (line == null) break;
+                if (IsFinalFor(line, id))
+                {
+                    Logger.Log($"sidecar のキャンセル完了を確認 #{id}");
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Logger.Log($"サイドカーがキャンセルに応答しません。作り直します #{id}");
+        }
+        Restart();
+    }
+
+    /// <summary>指定 id に対する最終応答 (進行イベントではない) かどうか。</summary>
+    private static bool IsFinalFor(string line, string id)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if ((root.TryGetProperty("id", out var idEl) ? idEl.GetString() : null) != id) return false;
+            return !root.TryGetProperty("event", out var ev) || ev.GetString() != "progress";
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

@@ -42,6 +42,8 @@ internal static class DebugCommands
                     return SttTest(config, args[1], args.Length > 2 ? args[2] : null);
                 case "--voice-insert-test":
                     return VoiceInsertTest(config);
+                case "--cancel-test":
+                    return CancelTest(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -107,6 +109,51 @@ internal static class DebugCommands
         Console.WriteLine("---- Claude 応答 ----");
         Console.WriteLine(result.Text);
         return 0;
+    }
+
+    /// <summary>
+    /// 「実行 → 途中でキャンセル → すぐ次を実行」が正しく回るかを検証する。
+    /// キャンセルがサイドカーに届かないと前の要求が走り続け、次の要求が返らなくなる。
+    /// </summary>
+    private static int CancelTest(AppConfig config)
+    {
+        var cwd = Path.GetTempPath();
+        var sidecar = ClaudeSidecar.Instance;
+
+        Console.WriteLine("1) 長めの依頼を投げて 8 秒後にキャンセルします");
+        using var cts = new CancellationTokenSource();
+        var first = sidecar.AskAsync(config, "1 から 200 までの素数を1つずつ理由を添えて丁寧に説明して。長くて構わない。",
+            cwd, null, [], detail => Console.WriteLine($"   進行: {detail}"), cts.Token);
+        System.Threading.Thread.Sleep(8000);
+        cts.Cancel();
+        try
+        {
+            first.GetAwaiter().GetResult();
+            Console.WriteLine("   NG: キャンセルしたのに完了しました");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("   キャンセルされました");
+        }
+
+        Console.WriteLine("2) 続けて次の依頼を投げます (前の要求が残っていると返ってきません)");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var second = sidecar.AskAsync(config, "「つながった」とだけ出力して。それ以外は何も書かないで。",
+                cwd, null, [], null, CancellationToken.None).GetAwaiter().GetResult();
+            sw.Stop();
+            Console.WriteLine($"   応答 ({sw.Elapsed.TotalSeconds:0.0}秒): {second.Text}");
+            Console.WriteLine("OK: キャンセル後も次の要求が通りました");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            Console.WriteLine($"   NG ({sw.Elapsed.TotalSeconds:0.0}秒): {ex.Message}");
+            return 1;
+        }
     }
 
     private static int RecordTest(AppConfig config, int seconds)
