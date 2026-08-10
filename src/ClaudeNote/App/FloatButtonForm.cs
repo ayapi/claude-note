@@ -21,6 +21,7 @@ public sealed class FloatButtonForm : Form
     private static readonly Color SparkBusyColor = ColorTranslator.FromHtml("#B8AC9F");
     private static readonly Color RingColor = ColorTranslator.FromHtml("#E0D8CE");
     private static readonly Color HoverBack = ColorTranslator.FromHtml("#FBF1EA");
+    private static readonly Color CancelColor = ColorTranslator.FromHtml("#C0392B");
 
     private readonly Action _onTap;
     private readonly System.Windows.Forms.Timer _spinTimer;
@@ -92,15 +93,23 @@ public sealed class FloatButtonForm : Form
     public void SetBusy(bool busy)
     {
         _busy = busy;
-        if (busy) _spinTimer.Start();
-        else { _spinTimer.Stop(); _angle = 0; }
+        if (busy)
+        {
+            _spinTimer.Start();
+        }
+        else
+        {
+            _spinTimer.Stop();
+            _angle = 0;
+        }
         Invalidate();
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        if (e.Button == MouseButtons.Left && !_busy) _onTap();
+        // 処理中のタップはキャンセルを意味する。判断は呼び出し側 (TrayContext) が行う
+        if (e.Button == MouseButtons.Left) _onTap();
     }
 
     protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
@@ -119,6 +128,15 @@ public sealed class FloatButtonForm : Form
 
         var center = size / 2f;
         g.TranslateTransform(center, center);
+
+        // 処理中にカーソルを乗せると×印になり、押すとキャンセルできることを示す
+        if (_busy && _hover)
+        {
+            DrawCancel(g, size);
+            g.ResetTransform();
+            return;
+        }
+
         if (_busy) g.RotateTransform(_angle);
 
         if (_customImage != null)
@@ -131,6 +149,15 @@ public sealed class FloatButtonForm : Form
             DrawSpark(g, size);
         }
         g.ResetTransform();
+    }
+
+    /// <summary>キャンセルを表す×印を原点中心に描く。</summary>
+    private static void DrawCancel(Graphics g, int size)
+    {
+        var arm = size * 0.20f;
+        using var pen = new Pen(CancelColor, Math.Max(size * 0.07f, 2f)) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        g.DrawLine(pen, -arm, -arm, arm, arm);
+        g.DrawLine(pen, -arm, arm, arm, -arm);
     }
 
     /// <summary>8方向の尖ったレイからなるスパークを原点中心に描く。</summary>

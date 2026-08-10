@@ -45,8 +45,23 @@ public sealed class ClaudeSidecar : IDisposable
             });
 
             Logger.Log($"sidecar 要求 #{id} (resume={resumeSessionId ?? "なし"}, cwd={cwd}, addDirs={addDirs.Length})");
-            await proc.StandardInput.WriteLineAsync(requestJson.AsMemory(), ct);
-            await proc.StandardInput.FlushAsync(ct);
+            await WriteLineAsync(proc, requestJson, ct);
+
+            // キャンセル時はサイドカーにも中断を伝える (SDK の abortController が発火する)。
+            // 中断後に届く応答行は id 不一致として次の要求で読み飛ばされる。
+            using var cancelReg = ct.Register(() =>
+            {
+                try
+                {
+                    var json = JsonSerializer.Serialize(new { id, cancel = true });
+                    WriteLineAsync(proc, json, CancellationToken.None).GetAwaiter().GetResult();
+                    Logger.Log($"sidecar へキャンセルを送信 #{id}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"キャンセル送信に失敗: {ex.Message}");
+                }
+            });
 
             var idle = TimeSpan.FromSeconds(Math.Max(config.TimeoutSeconds, 30));
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -79,10 +94,29 @@ public sealed class ClaudeSidecar : IDisposable
                 throw new UserFacingException(
                     $"Claude から {(int)idle.TotalSeconds} 秒間なにも進行イベントが届かなかったため、無応答とみなして中断しました。");
             }
+            // ct によるキャンセルは OperationCanceledException のまま呼び出し側へ伝える
+            // (サイドカーは再起動しない。中断済みの応答行は id 不一致で読み飛ばされる)
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+
+    /// <summary>サイドカーへの書き込みを直列化する (要求とキャンセルが別スレッドから来るため)。</summary>
+    private async Task WriteLineAsync(Process proc, string json, CancellationToken ct)
+    {
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            await proc.StandardInput.WriteLineAsync(json.AsMemory(), ct);
+            await proc.StandardInput.FlushAsync(ct);
+        }
+        finally
+        {
+            _writeGate.Release();
         }
     }
 
@@ -121,6 +155,8 @@ public sealed class ClaudeSidecar : IDisposable
             }
 
             var error = root.TryGetProperty("error", out var e) ? e.GetString() ?? "不明なエラー" : "不明なエラー";
+            if (root.TryGetProperty("canceled", out var cn) && cn.ValueKind == JsonValueKind.True)
+                throw new OperationCanceledException(error);
             var resumeFailed = root.TryGetProperty("resumeFailed", out var rf) && rf.ValueKind == JsonValueKind.True;
             if (resumeFailed && resumeSessionId != null)
                 throw new SessionResumeException(resumeSessionId, $"セッション継続に失敗: {error}");

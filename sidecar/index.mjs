@@ -1,8 +1,10 @@
 // ClaudeNote サイドカー: Claude Agent SDK を常駐プロセスとして提供する。
 // プロトコル: stdin/stdout の JSON Lines。
-//   要求: {"id":"1","prompt":"...","resume":"<sessionId>|null","cwd":"...","addDirs":["..."],"model":null}
-//   応答: {"id":"1","ok":true,"text":"...","sessionId":"..."}
-//       | {"id":"1","ok":false,"error":"...","resumeFailed":true?}
+//   要求:   {"id":"1","prompt":"...","resume":"<sessionId>|null","cwd":"...","addDirs":["..."],"model":null}
+//   中断:   {"id":"1","cancel":true}
+//   応答:   {"id":"1","ok":true,"text":"...","sessionId":"..."}
+//         | {"id":"1","ok":false,"error":"...","resumeFailed":true?,"canceled":true?}
+//   進行:   {"id":"1","event":"progress","kind":"...","detail":"..."}
 // ログはすべて stderr に出す (stdout はプロトコル専用)。
 import { createInterface } from "node:readline";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -10,10 +12,16 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 const log = (m) => process.stderr.write(`[sidecar] ${m}\n`);
 const respond = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 
+// 実行中の要求 id → AbortController。cancel 要求で中断するために保持する
+const inFlight = new Map();
+
 async function handle(req) {
   const { id, prompt, resume, cwd, addDirs, allowedTools, model } = req;
+  const abortController = new AbortController();
+  inFlight.set(id, abortController);
   try {
     const options = {
+      abortController,
       cwd: cwd || undefined,
       resume: resume || undefined,
       additionalDirectories: Array.isArray(addDirs) ? addDirs : [],
@@ -65,9 +73,26 @@ async function handle(req) {
     }
   } catch (e) {
     const message = String(e?.message ?? e);
-    log(`error: ${message}`);
-    respond({ id, ok: false, error: message, resumeFailed: Boolean(resume) });
+    if (abortController.signal.aborted) {
+      log(`canceled: #${id}`);
+      respond({ id, ok: false, error: "キャンセルされました", canceled: true });
+    } else {
+      log(`error: ${message}`);
+      respond({ id, ok: false, error: message, resumeFailed: Boolean(resume) });
+    }
+  } finally {
+    inFlight.delete(id);
   }
+}
+
+function cancel(id) {
+  const controller = inFlight.get(id);
+  if (!controller) {
+    log(`cancel: #${id} は実行中ではありません`);
+    return;
+  }
+  log(`cancel: #${id} を中断します`);
+  controller.abort();
 }
 
 let pending = 0;
@@ -85,6 +110,10 @@ rl.on("line", (line) => {
     req = JSON.parse(line);
   } catch (e) {
     respond({ id: null, ok: false, error: `不正な要求 JSON: ${e.message}` });
+    return;
+  }
+  if (req.cancel) {
+    cancel(req.id);
     return;
   }
   pending++;

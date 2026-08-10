@@ -12,6 +12,8 @@ public sealed class TrayContext : ApplicationContext
     private readonly HotkeyWindow _hotkey;
     private readonly AskFlow _flow;
     private readonly FloatButtonForm? _floatButton;
+    private readonly ForegroundWatcher? _foreground;
+    private CancellationTokenSource? _cts;
     private bool _busy;
     private DateTime _lastProgressBalloon;
 
@@ -55,7 +57,12 @@ public sealed class TrayContext : ApplicationContext
         if (config.FloatButton)
         {
             _floatButton = new FloatButtonForm(Math.Max(config.FloatButtonSize, 32), () => OnHotkey());
-            _floatButton.Show();
+
+            // ボタンは OneNote が前面のときだけ出す。ボタン自身は WS_EX_NOACTIVATE で
+            // 前面にならないため、タップしても OneNote が前面のまま保たれる
+            _foreground = new ForegroundWatcher("ONENOTE");
+            _foreground.ForegroundChanged += isOneNote => ApplyButtonVisibility(isOneNote);
+            ApplyButtonVisibility(_foreground.IsTargetForeground);
         }
 
         Logger.Log($"起動しました。ホットキー: {config.Hotkey}");
@@ -63,17 +70,38 @@ public sealed class TrayContext : ApplicationContext
             $"常駐を開始しました。OneNote で範囲を選択して {config.Hotkey} を押してください。", ToolTipIcon.Info);
     }
 
+    /// <summary>OneNote が前面のときだけボタンを見せる。フォーカスを奪わないよう ShowWithoutActivation に任せる。</summary>
+    private void ApplyButtonVisibility(bool isOneNoteForeground)
+    {
+        if (_floatButton == null || _floatButton.IsDisposed) return;
+        if (isOneNoteForeground)
+        {
+            if (!_floatButton.Visible) _floatButton.Show();
+        }
+        else if (_floatButton.Visible)
+        {
+            _floatButton.Hide();
+        }
+    }
+
     private async void OnHotkey()
     {
         Logger.Log("ホットキー受信");
         if (_busy)
         {
-            _icon.ShowBalloonTip(1500, "ClaudeNote", "処理中です。応答をお待ちください。", ToolTipIcon.Warning);
+            // 処理中の再操作はキャンセル
+            if (_cts is { IsCancellationRequested: false } cts)
+            {
+                Logger.Log("キャンセル要求");
+                _icon.ShowBalloonTip(2000, "ClaudeNote", "キャンセルしています…", ToolTipIcon.Info);
+                cts.Cancel();
+            }
             return;
         }
 
         _busy = true;
         _floatButton?.SetBusy(true);
+        _cts = new CancellationTokenSource();
         var prevText = _icon.Text;
         _icon.Text = "ClaudeNote - Claude に問い合わせ中…";
         _icon.ShowBalloonTip(2000, "ClaudeNote",
@@ -92,12 +120,19 @@ public sealed class TrayContext : ApplicationContext
                     var d = detail.Length <= 100 ? detail : detail[..100];
                     _icon.ShowBalloonTip(1500, "ClaudeNote", $"実行中: {d}", ToolTipIcon.Info);
                 }
-            });
+            }, _cts.Token);
             var plain = ResponseParser.StripDirectives(result.Response);
             var preview = plain.Length > 80 ? plain[..80] + "…" : plain;
             var mode = result.Resumed ? "会話の続き" : "新規会話";
             _icon.ShowBalloonTip(3000, "ClaudeNote", $"ノートに挿入しました ({mode}):\n{preview}", ToolTipIcon.Info);
             Logger.Log($"挿入完了 ({mode}, {result.Response.Length}文字) artifacts={result.ArtifactsDir}");
+        }
+        catch (OperationCanceledException)
+        {
+            // キャンセル時はノートへ挿入せず、セッション ID も更新しない
+            // (中断した会話が次回の resume 対象になると文脈が壊れるため)
+            _icon.ShowBalloonTip(2500, "ClaudeNote", "キャンセルしました。ノートには何も挿入していません。", ToolTipIcon.Info);
+            Logger.Log("キャンセルしました");
         }
         catch (UserFacingException ex)
         {
@@ -114,6 +149,8 @@ public sealed class TrayContext : ApplicationContext
             _icon.Text = prevText;
             _busy = false;
             _floatButton?.SetBusy(false);
+            _cts?.Dispose();
+            _cts = null;
         }
     }
 
@@ -157,7 +194,9 @@ public sealed class TrayContext : ApplicationContext
 
     private void ExitApp()
     {
+        _cts?.Cancel();
         _hotkey.Dispose();
+        _foreground?.Dispose();
         _floatButton?.Dispose();
         ClaudeSidecar.Shutdown();
         _icon.Visible = false;
