@@ -99,6 +99,13 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 
 無音や 0.6 秒未満の録音は送信せずに弾く (whisper が無音に対して幻聴を起こすため)。
 
+**ペン・タッチ対応**: Windows は既定でペン/タッチの長押しを「右クリック」ジェスチャに
+変換するため、そのままでは左ボタンが押しっぱなしにならず長押しが成立しない。
+`WM_TABLET_QUERYSYSTEMGESTURESTATUS` に応答して押し続けジェスチャとフリックを
+無効化している (`FloatButtonForm.WndProc`)。うまく反応しないときはログの
+`ボタン MouseDown` 行を見ると、入力がマウスかペン/タッチか、どのボタンとして
+届いたかが分かる。
+
 ## 図を描く (画像 / インク)
 
 Claude の応答に次のディレクティブを書くと、その位置に図が挿入される:

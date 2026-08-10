@@ -108,6 +108,39 @@ public sealed class FloatButtonForm : Form
     /// <summary>表示してもフォーカスを取らない。</summary>
     protected override bool ShowWithoutActivation => true;
 
+    // ペン/タッチの「長押し = 右クリック」ジェスチャを無効化する。
+    // 既定のままだと押しっぱなしが右クリックに化けて左ボタンが押しっぱなしにならず、
+    // 長押し (録音) が成立しない。
+    private const int WmTabletQuerySystemGestureStatus = 0x02CC;
+    private const int TabletDisablePressAndHold = 0x00000001;
+    private const int TabletDisablePenTapFeedback = 0x00000008;
+    private const int TabletDisablePenBarrelFeedback = 0x00000010;
+    private const int TabletDisableFlicks = 0x00010000;
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmTabletQuerySystemGestureStatus)
+        {
+            m.Result = TabletDisablePressAndHold | TabletDisablePenTapFeedback
+                | TabletDisablePenBarrelFeedback | TabletDisableFlicks;
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    /// <summary>直近の入力がペン/タッチ由来かを判定する (診断ログ用)。</summary>
+    private static string InputSource()
+    {
+        // MI_WP_SIGNATURE: ペン・タッチ由来のマウスメッセージに付く署名
+        const uint signature = 0xFF515700;
+        const uint mask = 0xFFFFFF00;
+        var extra = (uint)GetMessageExtraInfo().ToInt64();
+        return (extra & mask) == signature ? "ペン/タッチ" : "マウス";
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetMessageExtraInfo();
+
     protected override CreateParams CreateParams
     {
         get
@@ -136,6 +169,7 @@ public sealed class FloatButtonForm : Form
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
+        Logger.Log($"ボタン MouseDown: button={e.Button} 入力={InputSource()} 長押し={(_longPressTimer != null ? "有効" : "無効")} busy={_busy}");
         if (e.Button != MouseButtons.Left) return;
         _longPressFired = false;
         // 処理中は長押しを受け付けない (タップ = キャンセルのみ)
@@ -145,6 +179,7 @@ public sealed class FloatButtonForm : Form
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        Logger.Log($"ボタン MouseUp: button={e.Button} 長押し発火={_longPressFired}");
         if (e.Button != MouseButtons.Left) return;
         _longPressTimer?.Stop();
 
