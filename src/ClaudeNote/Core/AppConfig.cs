@@ -35,6 +35,9 @@ public sealed class ConfigProfile
 
     [JsonPropertyName("textOnlyPromptTemplate")]
     public string[]? TextOnlyPromptTemplate { get; set; }
+
+    [JsonPropertyName("voicePromptTemplate")]
+    public string[]? VoicePromptTemplate { get; set; }
 }
 
 public sealed class AppConfig
@@ -156,6 +159,67 @@ public sealed class AppConfig
 
     public string FigureGuideText => string.Join("\n", FigureGuide);
 
+    // ---- 音声入力 ----
+
+    /// <summary>丸ボタンの長押しで音声入力するか。</summary>
+    [JsonPropertyName("voiceInput")]
+    public bool VoiceInput { get; set; } = true;
+
+    /// <summary>長押しと判定するまでのミリ秒。</summary>
+    [JsonPropertyName("longPressMs")]
+    public int LongPressMs { get; set; } = 400;
+
+    /// <summary>録音の上限秒数。</summary>
+    [JsonPropertyName("maxRecordSeconds")]
+    public int MaxRecordSeconds { get; set; } = 60;
+
+    /// <summary>録音デバイス番号。null なら既定のマイク。</summary>
+    [JsonPropertyName("audioDevice")]
+    public int? AudioDevice { get; set; }
+
+    /// <summary>文字起こしエンジン: "auto" / "whisper" / "windows"。</summary>
+    [JsonPropertyName("sttEngine")]
+    public string SttEngine { get; set; } = "auto";
+
+    /// <summary>認識する言語 (ja / en)。</summary>
+    [JsonPropertyName("sttLanguage")]
+    public string SttLanguage { get; set; } = "ja";
+
+    /// <summary>whisper-cli.exe のパス。null なら whisper は使わない。</summary>
+    [JsonPropertyName("whisperExe")]
+    public string? WhisperExe { get; set; }
+
+    /// <summary>whisper のモデル (ggml-*.bin) のパス。</summary>
+    [JsonPropertyName("whisperModel")]
+    public string? WhisperModel { get; set; }
+
+    /// <summary>文字起こしテキストの行頭に付ける記号。</summary>
+    [JsonPropertyName("voicePrefix")]
+    public string VoicePrefix { get; set; } = "💬 ";
+
+    /// <summary>文字起こしテキストの色 (CSS hex)。</summary>
+    [JsonPropertyName("voiceColor")]
+    public string VoiceColor { get; set; } = "#6B7280";
+
+    /// <summary>音声入力に選択範囲のキャプチャ画像も添えるか。</summary>
+    [JsonPropertyName("voiceIncludesSelection")]
+    public bool VoiceIncludesSelection { get; set; } = true;
+
+    /// <summary>音声入力時のプロンプト。{voice} に文字起こし、{image} に画像パスが入る。</summary>
+    [JsonPropertyName("voicePromptTemplate")]
+    public string[] VoicePromptTemplate { get; set; } =
+    [
+        "手書きノートについて口頭で質問されました。文字起こしした発言は次のとおりです。",
+        "---",
+        "{voice}",
+        "---",
+        "{voiceSelection}",
+        "この質問に日本語で答えてください。出力はそのまま OneNote に挿入されます。プレーンテキストのみ（マークダウン記法なし）。",
+        "{figureGuide}",
+    ];
+
+    public string VoicePromptTemplateText => string.Join("\n", VoicePromptTemplate);
+
     /// <summary>画面右下のフローティングボタンを表示するか。</summary>
     [JsonPropertyName("floatButton")]
     public bool FloatButton { get; set; } = true;
@@ -198,6 +262,18 @@ public sealed class AppConfig
             FigureGuide = FigureGuide,
             FloatButton = FloatButton,
             FloatButtonSize = FloatButtonSize,
+            VoiceInput = VoiceInput,
+            LongPressMs = LongPressMs,
+            MaxRecordSeconds = MaxRecordSeconds,
+            AudioDevice = AudioDevice,
+            SttEngine = SttEngine,
+            SttLanguage = SttLanguage,
+            WhisperExe = WhisperExe,
+            WhisperModel = WhisperModel,
+            VoicePrefix = VoicePrefix,
+            VoiceColor = VoiceColor,
+            VoiceIncludesSelection = VoiceIncludesSelection,
+            VoicePromptTemplate = profile.VoicePromptTemplate ?? VoicePromptTemplate,
             AllowedTools = profile.AllowedTools ?? AllowedTools,
             AddDirs = profile.AddDirs ?? AddDirs,
             PromptTemplate = profile.PromptTemplate ?? PromptTemplate,

@@ -224,6 +224,36 @@ public static class PageXml
         return pageEl.ToString(SaveOptions.DisableFormatting);
     }
 
+    /// <summary>
+    /// 直前に挿入したアウトラインを本文の一部で探して、その矩形を返す。
+    /// 2 段階挿入 (文字起こし → 回答) で、後続を実際の位置の下に置くために使う。
+    /// 見つからなければ null。
+    /// </summary>
+    public static Rect? FindOutlineByText(string pageXml, string snippet)
+    {
+        if (string.IsNullOrWhiteSpace(snippet)) return null;
+        var normalized = Normalize(snippet);
+        if (normalized.Length == 0) return null;
+
+        var page = XDocument.Parse(pageXml).Root;
+        if (page == null) return null;
+
+        Rect? best = null;
+        foreach (var outline in page.Elements(One + "Outline"))
+        {
+            var text = Normalize(string.Concat(
+                outline.Descendants(One + "T").Select(t => TagPattern.Replace(t.Value, ""))));
+            if (text.Length == 0 || !text.Contains(normalized)) continue;
+            if (ReadRect(outline) is not Rect r) continue;
+            // 同じ文面が複数あるときは一番下のものを採用する (直前に足したものが下にある)
+            if (best is not Rect b || r.Bottom > b.Bottom) best = r;
+        }
+        return best;
+    }
+
+    private static string Normalize(string s) =>
+        WebUtility.HtmlDecode(s).Replace(" ", "").Replace(" ", "").Replace("\n", "").Replace("\r", "").Trim();
+
     private static bool AppendImage(XElement pageEl, ImagePart img, double x, double y, out double heightPt)
     {
         heightPt = 0;

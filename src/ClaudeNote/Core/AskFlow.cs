@@ -3,7 +3,8 @@ using System.Windows;
 
 namespace ClaudeNote;
 
-public sealed record AskResult(string Response, string? PngPath, string ArtifactsDir, bool Resumed);
+public sealed record AskResult(string Response, string? PngPath, string ArtifactsDir, bool Resumed,
+    string? VoiceText = null);
 
 /// <summary>
 /// キャプチャ → 透明PNG化 → Claude 問い合わせ (会話セッション継続) → ノートへ挿入、のメインフロー。
@@ -20,6 +21,133 @@ public sealed class AskFlow
         string.IsNullOrWhiteSpace(cfg.WorkspaceDir)
             ? Path.Combine(Logger.BaseDir, "workspace")
             : Environment.ExpandEnvironmentVariables(cfg.WorkspaceDir);
+
+    /// <summary>
+    /// 音声入力の実行。録音済み WAV を文字起こしし、吹き出しとして先に挿入してから
+    /// Claude に問い合わせ、回答をその下に入れる。
+    /// </summary>
+    public async Task<AskResult> RunVoiceAsync(string wavPath, Action<string>? onProgress = null,
+        CancellationToken ct = default)
+    {
+        var onenote = new OneNoteApp();
+
+        var (pageId, sectionId) = onenote.GetCurrentContext();
+        if (string.IsNullOrEmpty(pageId))
+            throw new UserFacingException("OneNote でページを開いた状態で実行してください。");
+
+        var cfg = ResolveConfig(onenote, sectionId);
+        var workspace = ResolveWorkspace(cfg);
+        var dir = Path.Combine(workspace, "captures", DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-voice");
+        Directory.CreateDirectory(dir);
+
+        // 録音を成果物フォルダへ移し、あとから聞き直せるようにする
+        var keptWav = Path.Combine(dir, "voice.wav");
+        try { File.Move(wavPath, keptWav, overwrite: true); wavPath = keptWav; } catch { }
+
+        onProgress?.Invoke("文字起こし中…");
+        var voiceText = await Transcriber.TranscribeAsync(cfg, wavPath, ct);
+        if (string.IsNullOrWhiteSpace(voiceText))
+            throw new UserFacingException("音声を認識できませんでした。もう一度お試しください。");
+        ct.ThrowIfCancellationRequested();
+
+        // 選択範囲があれば一緒に送る (「この図の面積は?」のような使い方)
+        var pageXml = onenote.GetPageXml(pageId);
+        var sel = PageXml.ParseSelection(pageXml);
+        RenderResult? render = null;
+        if (cfg.VoiceIncludesSelection && sel.HasVisual)
+        {
+            render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"));
+            if (render != null)
+                Logger.Log($"音声入力に選択範囲を添付: {render.WidthPx}x{render.HeightPx}px");
+        }
+
+        // 1 段階目: 文字起こしを吹き出しとして先に入れる
+        var anchor = sel.BoundsPt ?? sel.FallbackBoundsPt ?? new Rect(72, 72, 240, 20);
+        var bubble = cfg.VoicePrefix + voiceText;
+        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], cfg.VoiceColor, null));
+        onProgress?.Invoke("文字起こしを挿入しました。回答を待っています…");
+
+        // 挿入された吹き出しの実際の位置を読み直し、回答をその下に置く
+        var answerAnchor = anchor;
+        try
+        {
+            var after = onenote.GetPageXml(pageId);
+            if (PageXml.FindOutlineByText(after, voiceText) is Rect inserted)
+                answerAnchor = inserted;
+            else
+                Logger.Log("挿入した吹き出しを再取得できませんでした。元の位置を基準にします。");
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"吹き出し位置の再取得に失敗: {ex.Message}");
+        }
+
+        // 2 段階目: Claude に問い合わせて回答を吹き出しの下に入れる
+        var (scopeKey, store, entry) = ResolveSession(cfg, pageId, sectionId);
+        var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
+        var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
+
+        var voiceSelection = render != null
+            ? $"あわせて、ノート上で選択されていた範囲の画像を送ります。まず {render.PngPath} を Read ツールで読み取ってから答えてください。"
+            : "";
+        var prompt = cfg.VoicePromptTemplateText
+            .Replace("{voice}", voiceText)
+            .Replace("{voiceSelection}", voiceSelection)
+            .Replace("{image}", render?.PngPath ?? "")
+            .Replace("{figureGuide}", cfg.FigureGuideText);
+
+        var addDirs = cfg.ExpandedAddDirs;
+        ClaudeResult result;
+        try
+        {
+            result = await AskEngineAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
+        }
+        catch (SessionResumeException ex)
+        {
+            Logger.Log($"resume 失敗、新規セッションで再試行: {ex.Message}");
+            result = await AskEngineAsync(cfg, prompt, runCwd, null, addDirs, onProgress, ct);
+        }
+
+        if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
+            store!.Update(scopeKey, result.SessionId!);
+
+        var parts = ResponseParser.Parse(result.Text);
+        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, answerAnchor, parts, cfg.ResponseColor, render?.Map));
+
+        if (cfg.KeepArtifacts)
+        {
+            try
+            {
+                File.WriteAllText(Path.Combine(dir, "voice.txt"), voiceText);
+                File.WriteAllText(Path.Combine(dir, "response.txt"), result.Text);
+            }
+            catch { }
+        }
+
+        return new AskResult(result.Text, render?.PngPath, dir, resumeId != null, voiceText);
+    }
+
+    private AppConfig ResolveConfig(OneNoteApp onenote, string sectionId)
+    {
+        if (_config.Profiles.Length == 0 || string.IsNullOrEmpty(sectionId)) return _config;
+        var sectionName = onenote.GetSectionName(sectionId);
+        var cfg = _config.ResolveForSection(sectionName, out var matched);
+        Logger.Log($"セクション '{sectionName}' → プロファイル {matched}");
+        return cfg;
+    }
+
+    private static (string? ScopeKey, SessionStore? Store, SessionEntry? Entry) ResolveSession(
+        AppConfig cfg, string pageId, string sectionId)
+    {
+        var scopeKey = cfg.SessionScope.ToLowerInvariant() switch
+        {
+            "off" => null,
+            "page" => pageId,
+            _ => !string.IsNullOrEmpty(sectionId) ? sectionId : pageId,
+        };
+        var store = scopeKey != null ? new SessionStore() : null;
+        return (scopeKey, store, scopeKey != null ? store!.Get(scopeKey) : null);
+    }
 
     public async Task<AskResult> RunAsync(Action<string>? onProgress = null, CancellationToken ct = default)
     {

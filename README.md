@@ -70,7 +70,34 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 - **処理中はスパークが回転**し、カーソルを乗せると×印に変わる。この状態で押すと
   **実行中の問い合わせをキャンセル**できる (ホットキーの再押下でも同じ)。
   キャンセルするとノートには何も挿入されず、会話セッションも更新されない
+- **長押しで音声入力** (下記)。押している間だけ録音し、離すと文字起こしされる
 - `%LOCALAPPDATA%\ClaudeNote\button.png` を置くと既定のスパークの代わりにその画像が使われる
+
+## 音声入力
+
+丸ボタンを**押している間**がマイク録音になる (既定 400ms 以上で長押し判定、録音中は赤く明滅)。
+指を離すと次の順で処理される:
+
+1. 文字起こし
+2. **文字起こしを先にノートへ挿入** (行頭に 💬、灰色)。認識が合っているかすぐ確認できる
+3. 文字起こし + **選択範囲のキャプチャ画像**を Claude に送信
+4. 回答を吹き出しの真下に挿入
+
+選択範囲があれば画像も一緒に送るので、図を選んで「これの面積はどう求めるの?」と
+口で聞ける (`voiceIncludesSelection` で無効化可)。
+
+文字起こしエンジンは環境に合わせて選べる:
+
+| `sttEngine` | 内容 |
+|---|---|
+| `auto` (既定) | `whisperExe` が設定されていれば whisper、無ければ windows |
+| `whisper` | whisper.cpp。高精度だがモデル (`ggml-*.bin`) の配置が必要。`whisperExe` / `whisperModel` を設定する |
+| `windows` | Windows 標準の音声認識 (System.Speech)。追加インストール不要で速いが精度は劣る |
+
+実測 (8秒の音声): whisper large-v3-turbo は約 6 秒で高精度、Windows 標準は約 0.7 秒だが
+誤認識が目立つ。短い質問なら whisper の小さめモデル (base / small) でも足りる。
+
+無音や 0.6 秒未満の録音は送信せずに弾く (whisper が無音に対して幻聴を起こすため)。
 
 ## 図を描く (画像 / インク)
 
@@ -138,7 +165,14 @@ ClaudeNote.exe --render-test <xml> <png>    # 保存済みページ XML の全 i
 ClaudeNote.exe --ask-test <png> [sessionId] # PNG を Claude に送って応答を表示のみ (sessionId 指定で resume 検証)
 ClaudeNote.exe --insert-test                # テストページ作成→挿入→検証→削除
 ClaudeNote.exe --figure-test                # 図 (画像+インク+補助線) の挿入と座標変換を検証
+ClaudeNote.exe --mic-list                   # 録音デバイスの一覧
+ClaudeNote.exe --record-test [秒]           # 録音して文字起こしまで通す
+ClaudeNote.exe --stt-test <wav> [engine]    # 既存の WAV を文字起こし (engine 指定で比較できる)
+ClaudeNote.exe --voice-insert-test          # 吹き出し → 回答の2段階挿入を検証
 ```
+
+※ この exe は WinExe のため、コンソールから実行するときは `| Out-String` などで
+パイプしないと出力が表示されない。
 
 ログ: `%LOCALAPPDATA%\ClaudeNote\claude-note.log`
 

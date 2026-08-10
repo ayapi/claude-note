@@ -22,19 +22,42 @@ public sealed class FloatButtonForm : Form
     private static readonly Color RingColor = ColorTranslator.FromHtml("#E0D8CE");
     private static readonly Color HoverBack = ColorTranslator.FromHtml("#FBF1EA");
     private static readonly Color CancelColor = ColorTranslator.FromHtml("#C0392B");
+    private static readonly Color RecordColor = ColorTranslator.FromHtml("#D93025");
+    private static readonly Color RecordBack = ColorTranslator.FromHtml("#FDECEA");
 
     private readonly Action _onTap;
     private readonly System.Windows.Forms.Timer _spinTimer;
+    private readonly System.Windows.Forms.Timer? _longPressTimer;
     private readonly Image? _customImage;
     private readonly int _logicalSize;
     private bool _busy;
     private bool _hover;
+    private bool _recording;
+    private bool _longPressFired;
     private float _angle;
+    private float _pulse;
 
-    public FloatButtonForm(int size, Action onTap)
+    /// <summary>長押しの開始 (録音開始)。設定で音声入力が有効なときだけ呼ばれる。</summary>
+    public event Action? LongPressStarted;
+
+    /// <summary>長押しの終了 (録音停止)。LongPressStarted の後に必ず呼ばれる。</summary>
+    public event Action? LongPressEnded;
+
+    public FloatButtonForm(int size, Action onTap, int longPressMs = 0)
     {
         _onTap = onTap;
         _logicalSize = size;
+        if (longPressMs > 0)
+        {
+            _longPressTimer = new System.Windows.Forms.Timer { Interval = longPressMs };
+            _longPressTimer.Tick += (_, _) =>
+            {
+                _longPressTimer.Stop();
+                _longPressFired = true;
+                SetRecording(true);
+                LongPressStarted?.Invoke();
+            };
+        }
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
@@ -45,7 +68,12 @@ public sealed class FloatButtonForm : Form
         _customImage = LoadCustomImage();
 
         _spinTimer = new System.Windows.Forms.Timer { Interval = 100 };
-        _spinTimer.Tick += (_, _) => { _angle = (_angle + 18f) % 360f; Invalidate(); };
+        _spinTimer.Tick += (_, _) =>
+        {
+            _angle = (_angle + 18f) % 360f;
+            _pulse = (_pulse + 0.15f) % 1f;
+            Invalidate();
+        };
     }
 
     protected override void OnLoad(EventArgs e)
@@ -105,11 +133,39 @@ public sealed class FloatButtonForm : Form
         Invalidate();
     }
 
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.Button != MouseButtons.Left) return;
+        _longPressFired = false;
+        // 処理中は長押しを受け付けない (タップ = キャンセルのみ)
+        if (!_busy) _longPressTimer?.Start();
+    }
+
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        // 処理中のタップはキャンセルを意味する。判断は呼び出し側 (TrayContext) が行う
-        if (e.Button == MouseButtons.Left) _onTap();
+        if (e.Button != MouseButtons.Left) return;
+        _longPressTimer?.Stop();
+
+        if (_longPressFired)
+        {
+            _longPressFired = false;
+            SetRecording(false);
+            LongPressEnded?.Invoke();
+            return;
+        }
+        // 短いタップ。処理中ならキャンセルを意味する。判断は呼び出し側 (TrayContext) が行う
+        _onTap();
+    }
+
+    private void SetRecording(bool recording)
+    {
+        _recording = recording;
+        if (recording) _spinTimer.Start();
+        else if (!_busy) _spinTimer.Stop();
+        _pulse = 0;
+        Invalidate();
     }
 
     protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); _hover = true; Invalidate(); }
@@ -121,13 +177,24 @@ public sealed class FloatButtonForm : Form
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var size = ClientSize.Width;
 
-        using (var back = new SolidBrush(_hover && !_busy ? HoverBack : Color.White))
+        using (var back = new SolidBrush(_recording ? RecordBack : (_hover && !_busy ? HoverBack : Color.White)))
             g.FillEllipse(back, 0, 0, size - 1, size - 1);
-        using (var ring = new Pen(RingColor, 1.5f))
+        using (var ring = new Pen(_recording ? RecordColor : RingColor, _recording ? 2.5f : 1.5f))
             g.DrawEllipse(ring, 1, 1, size - 3, size - 3);
 
         var center = size / 2f;
         g.TranslateTransform(center, center);
+
+        // 録音中はマイクを表す丸を明滅させる
+        if (_recording)
+        {
+            var scale = 0.85f + 0.15f * (float)Math.Sin(_pulse * Math.PI * 2);
+            var r = size * 0.16f * scale;
+            using var brush = new SolidBrush(RecordColor);
+            g.FillEllipse(brush, -r, -r, r * 2, r * 2);
+            g.ResetTransform();
+            return;
+        }
 
         // 処理中にカーソルを乗せると×印になり、押すとキャンセルできることを示す
         if (_busy && _hover)
@@ -206,6 +273,7 @@ public sealed class FloatButtonForm : Form
         if (disposing)
         {
             _spinTimer.Dispose();
+            _longPressTimer?.Dispose();
             _customImage?.Dispose();
         }
         base.Dispose(disposing);

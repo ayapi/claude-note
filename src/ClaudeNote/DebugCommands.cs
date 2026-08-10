@@ -10,6 +10,9 @@ namespace ClaudeNote;
 ///   --ask-test &lt;png&gt; [sessionId]     : PNG を claude CLI に送って応答を表示 (挿入なし)。sessionId 指定で resume 検証
 ///   --insert-test                        : テストページを作成して挿入 → 検証 → ページ削除
 ///   --figure-test                        : 図 (画像 + インク) の挿入を検証 → ページ削除
+///   --mic-list                           : 録音デバイスの一覧
+///   --record-test [秒]                   : 指定秒だけ録音して文字起こしまで通す
+///   --stt-test &lt;wav&gt;                 : 既存の WAV を文字起こしする
 /// </summary>
 internal static class DebugCommands
 {
@@ -30,6 +33,15 @@ internal static class DebugCommands
                     return InsertTest(config);
                 case "--figure-test":
                     return FigureTest(config);
+                case "--mic-list":
+                    foreach (var d in AudioRecorder.ListDevices()) Console.WriteLine(d);
+                    return 0;
+                case "--record-test":
+                    return RecordTest(config, args.Length > 1 && int.TryParse(args[1], out var s) ? s : 5);
+                case "--stt-test":
+                    return SttTest(config, args[1], args.Length > 2 ? args[2] : null);
+                case "--voice-insert-test":
+                    return VoiceInsertTest(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -95,6 +107,93 @@ internal static class DebugCommands
         Console.WriteLine("---- Claude 応答 ----");
         Console.WriteLine(result.Text);
         return 0;
+    }
+
+    private static int RecordTest(AppConfig config, int seconds)
+    {
+        var wav = Path.Combine(Path.GetTempPath(), "claudenote-record-test.wav");
+        using var recorder = new AudioRecorder();
+        Console.WriteLine($"{seconds} 秒間録音します。話しかけてください…");
+        recorder.Start(wav, config.AudioDevice, seconds + 5);
+        System.Threading.Thread.Sleep(seconds * 1000);
+        var rec = recorder.Stop();
+        if (rec == null) { Console.WriteLine("録音できませんでした"); return 1; }
+        Console.WriteLine($"録音: {rec.Duration.TotalSeconds:0.0}秒 peak={rec.PeakLevel:0.000} → {rec.WavPath}");
+        if (rec.PeakLevel < 0.02) Console.WriteLine("※ ほぼ無音です。マイクを確認してください");
+        return SttTest(config, rec.WavPath, null);
+    }
+
+    private static int SttTest(AppConfig config, string wavPath, string? engineOverride)
+    {
+        if (engineOverride != null) config.SttEngine = engineOverride;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var text = Transcriber.TranscribeAsync(config, Path.GetFullPath(wavPath)).GetAwaiter().GetResult();
+        sw.Stop();
+        Console.WriteLine($"engine={config.SttEngine} 所要 {sw.Elapsed.TotalSeconds:0.0} 秒");
+        Console.WriteLine("---- 文字起こし ----");
+        Console.WriteLine(text);
+        return string.IsNullOrWhiteSpace(text) ? 1 : 0;
+    }
+
+    /// <summary>
+    /// 音声入力の 2 段階挿入を検証する。吹き出しを入れ、その実際の位置を読み直し、
+    /// 回答が確実にその下へ入ることを確かめる。マイクは使わない。
+    /// </summary>
+    private static int VoiceInsertTest(AppConfig config)
+    {
+        var onenote = new OneNoteApp();
+        var (sectionId, sectionName) = FindRecentSection(onenote);
+        Console.WriteLine($"対象セクション: {sectionName}");
+
+        var pageId = onenote.CreateNewPage(sectionId);
+        Console.WriteLine($"テストページ作成: {pageId}");
+        try
+        {
+            var voiceText = "この三角形の面積はどうやって求めるの";
+            var anchor = new System.Windows.Rect(72, 100, 300, 80);
+
+            // 1 段階目: 吹き出し
+            var bubble = config.VoicePrefix + voiceText;
+            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], config.VoiceColor, null));
+            System.Threading.Thread.Sleep(800);
+
+            // 挿入された吹き出しの実位置を取得
+            var after = onenote.GetPageXml(pageId);
+            var found = PageXml.FindOutlineByText(after, voiceText);
+            if (found is not System.Windows.Rect bubbleRect)
+            {
+                Console.WriteLine("NG: 挿入した吹き出しを見つけられませんでした");
+                return 1;
+            }
+            Console.WriteLine($"吹き出しの実位置: x={bubbleRect.X:0.#} y={bubbleRect.Y:0.#} h={bubbleRect.Height:0.#}");
+
+            // 2 段階目: 回答を吹き出しの下へ
+            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, bubbleRect,
+                [new TextPart("底辺かける高さわる2だよ。まず底辺がどれか探してみて。")], config.ResponseColor, null));
+            System.Threading.Thread.Sleep(800);
+
+            // 順序の検証: 回答が吹き出しより下にあること
+            var final = onenote.GetPageXml(pageId);
+            var bubbleFinal = PageXml.FindOutlineByText(final, voiceText);
+            var answerFinal = PageXml.FindOutlineByText(final, "底辺かける高さわる2");
+            if (bubbleFinal is not System.Windows.Rect b2 || answerFinal is not System.Windows.Rect a2)
+            {
+                Console.WriteLine($"NG: 読み戻せません (吹き出し={bubbleFinal != null} 回答={answerFinal != null})");
+                return 1;
+            }
+            Console.WriteLine($"吹き出し y={b2.Y:0.#} (下端 {b2.Bottom:0.#}) / 回答 y={a2.Y:0.#}");
+            var ordered = a2.Y >= b2.Bottom - 1;
+            var noOverlap = a2.Y > b2.Y;
+            Console.WriteLine(ordered && noOverlap
+                ? "OK: 回答が吹き出しの下に入りました"
+                : "NG: 回答の位置が吹き出しと重なっています");
+            return ordered && noOverlap ? 0 : 1;
+        }
+        finally
+        {
+            onenote.DeleteHierarchyItem(pageId);
+            Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
+        }
     }
 
     /// <summary>図 (画像 + インク + 補助線) の挿入をテストページで検証する。</summary>
