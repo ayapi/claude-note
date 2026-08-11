@@ -3,7 +3,7 @@ using System.Windows;
 
 namespace ClaudeNote;
 
-public sealed record AskResult(string Response, string? PngPath, string ArtifactsDir, bool Resumed,
+public sealed record AskResult(string Response, string? PngPath, string ArtifactsDir, string SessionMode,
     string? VoiceText = null);
 
 /// <summary>
@@ -93,16 +93,8 @@ public sealed class AskFlow
             .Replace("{figureGuide}", cfg.FigureGuideText);
 
         var addDirs = cfg.ExpandedAddDirs;
-        ClaudeResult result;
-        try
-        {
-            result = await AskEngineAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
-        }
-        catch (SessionResumeException ex)
-        {
-            Logger.Log($"resume 失敗、新規セッションで再試行: {ex.Message}");
-            result = await AskEngineAsync(cfg, prompt, runCwd, null, addDirs, onProgress, ct);
-        }
+        var outcome = await AskWithContinuityAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
+        var result = outcome.Result;
 
         if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
             store!.Update(scopeKey, result.SessionId!);
@@ -120,7 +112,7 @@ public sealed class AskFlow
             catch { }
         }
 
-        return new AskResult(result.Text, render?.PngPath, dir, resumeId != null, voiceText);
+        return new AskResult(result.Text, render?.PngPath, dir, outcome.SessionMode, voiceText);
     }
 
     private AppConfig ResolveConfig(OneNoteApp onenote, string sectionId)
@@ -203,18 +195,8 @@ public sealed class AskFlow
         var prompt = BuildPrompt(cfg, sel, render, resumed: resumeId != null);
 
         var addDirs = cfg.ExpandedAddDirs;
-        ClaudeResult result;
-        try
-        {
-            result = await AskEngineAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
-        }
-        catch (SessionResumeException ex)
-        {
-            // 保存していたセッションが消えている場合は新規会話でやり直す
-            Logger.Log($"resume 失敗、新規セッションで再試行: {ex.Message}");
-            prompt = BuildPrompt(cfg, sel, render, resumed: false);
-            result = await AskEngineAsync(cfg, prompt, runCwd, null, addDirs, onProgress, ct);
-        }
+        var outcome = await AskWithContinuityAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
+        var result = outcome.Result;
 
         // -p --resume は毎回新しいセッション ID にフォークする実装もあるため、常に最新 ID を保存する
         if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
@@ -234,7 +216,7 @@ public sealed class AskFlow
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
 
-        return new AskResult(result.Text, render?.PngPath, dir, resumeId != null);
+        return new AskResult(result.Text, render?.PngPath, dir, outcome.SessionMode);
     }
 
     /// <summary>
@@ -280,6 +262,61 @@ public sealed class AskFlow
         cfg.Engine.Equals("cli", StringComparison.OrdinalIgnoreCase)
             ? ClaudeCli.AskAsync(cfg, prompt, cwd, resumeId, addDirs, ct)
             : ClaudeSidecar.Instance.AskAsync(cfg, prompt, cwd, resumeId, addDirs, onProgress, ct);
+
+    private sealed record AskOutcome(ClaudeResult Result, string SessionMode);
+
+    /// <summary>
+    /// 会話の継続を試み、失敗したら前セッションの記録を読ませて引き継がせる。
+    /// 黙って新規会話に落とすと、家庭教師がそれまでの学習内容を失ったまま答えてしまう。
+    /// </summary>
+    private static async Task<AskOutcome> AskWithContinuityAsync(AppConfig cfg, string prompt, string cwd,
+        string? resumeId, string[] addDirs, Action<string>? onProgress, CancellationToken ct)
+    {
+        if (resumeId == null)
+            return new AskOutcome(await AskEngineAsync(cfg, prompt, cwd, null, addDirs, onProgress, ct), "新規会話");
+
+        try
+        {
+            return new AskOutcome(
+                await AskEngineAsync(cfg, prompt, cwd, resumeId, addDirs, onProgress, ct), "会話の続き");
+        }
+        catch (SessionResumeException ex)
+        {
+            Logger.Log($"resume 失敗: {ex.Message}");
+
+            var file = cfg.SessionTakeover ? SessionArchive.Find(resumeId) : null;
+            if (file == null)
+            {
+                Logger.Log(cfg.SessionTakeover
+                    ? $"セッション記録が見つからないため、文脈なしの新規会話で続けます ({resumeId})"
+                    : "引き継ぎが無効なため、新規会話で続けます");
+                return new AskOutcome(
+                    await AskEngineAsync(cfg, prompt, cwd, null, addDirs, onProgress, ct), "新規会話 (文脈なし)");
+            }
+
+            // 記録ファイルを読めるようにディレクトリを許可に加える
+            var dir = Path.GetDirectoryName(file)!;
+            var withArchive = addDirs.Contains(dir) ? addDirs : [.. addDirs, dir];
+
+            var takeover = cfg.SessionTakeoverPromptText
+                .Replace("{sessionId}", resumeId)
+                .Replace("{sessionFile}", file)
+                .Replace("{sessionSizeMb}", SessionArchive.SizeMb(file).ToString("0.0"))
+                .Replace("{reason}", Summarize(ex.Message));
+
+            Logger.Log($"前セッションの記録を読ませて引き継ぎます: {file}");
+            onProgress?.Invoke("前回の記録を読み込んで引き継いでいます…");
+            return new AskOutcome(
+                await AskEngineAsync(cfg, takeover + "\n" + prompt, cwd, null, withArchive, onProgress, ct),
+                "前セッションを引き継ぎ");
+        }
+    }
+
+    private static string Summarize(string message)
+    {
+        var text = message.Replace("セッション継続に失敗: ", "").Replace('\n', ' ').Trim();
+        return text.Length <= 160 ? text : text[..160] + "…";
+    }
 
     private static string BuildPrompt(AppConfig cfg, Selection sel, RenderResult? render, bool resumed)
     {

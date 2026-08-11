@@ -48,6 +48,8 @@ internal static class DebugCommands
                     return SelectionTest(args[1]);
                 case "--multipart-test":
                     return MultipartTest(config);
+                case "--takeover-test":
+                    return TakeoverTest(config, args.Length > 1 ? args[1] : null);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -206,6 +208,47 @@ internal static class DebugCommands
             Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
             try { File.Delete(pngPath); } catch { }
         }
+    }
+
+    /// <summary>
+    /// 前セッションの記録を読ませて文脈を引き継げるかを検証する。
+    /// 記録ファイルを直接読ませて、そこにしか無い内容を答えられるか確かめる。
+    /// </summary>
+    private static int TakeoverTest(AppConfig config, string? sessionId)
+    {
+        sessionId ??= "2dd180c8-453a-4b95-a91b-f8a74e47c8d8";
+        var file = SessionArchive.Find(sessionId);
+        if (file == null)
+        {
+            Console.WriteLine($"セッション記録が見つかりません: {sessionId}");
+            return 1;
+        }
+        Console.WriteLine($"記録ファイル: {file} ({SessionArchive.SizeMb(file):0.0} MB)");
+
+        var takeover = config.SessionTakeoverPromptText
+            .Replace("{sessionId}", sessionId)
+            .Replace("{sessionFile}", file)
+            .Replace("{sessionSizeMb}", SessionArchive.SizeMb(file).ToString("0.0"))
+            .Replace("{reason}", "テストのため意図的に失敗させた");
+
+        var question = "引き継いだ内容から答えて: この学習者はどんな研修を受けていて、"
+            + "直近ではどんな課題に取り組んでいましたか。3行以内で。";
+
+        var dir = Path.GetDirectoryName(file)!;
+        var addDirs = config.ExpandedAddDirs.Contains(dir)
+            ? config.ExpandedAddDirs
+            : [.. config.ExpandedAddDirs, dir];
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = ClaudeSidecar.Instance.AskAsync(config, takeover + "\n" + question,
+            Path.GetTempPath(), null, addDirs,
+            detail => Console.WriteLine($"   進行: {detail}"), CancellationToken.None)
+            .GetAwaiter().GetResult();
+        sw.Stop();
+
+        Console.WriteLine($"---- 応答 ({sw.Elapsed.TotalSeconds:0}秒) ----");
+        Console.WriteLine(result.Text);
+        return 0;
     }
 
     /// <summary>保存したページ XML に対して選択判定だけを走らせる (回帰テスト用)。</summary>

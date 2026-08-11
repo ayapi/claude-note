@@ -286,10 +286,10 @@ public sealed class TrayContext : ApplicationContext
 
             var plain = ResponseParser.StripDirectives(result.Response);
             var preview = plain.Length > 80 ? plain[..80] + "…" : plain;
-            var mode = result.Resumed ? "会話の続き" : "新規会話";
             var heard = result.VoiceText != null ? $"「{Shorten(result.VoiceText, 40)}」\n" : "";
-            _icon.ShowBalloonTip(3000, "ClaudeNote", $"{heard}ノートに挿入しました ({mode}):\n{preview}", ToolTipIcon.Info);
-            Logger.Log($"挿入完了 ({mode}, {result.Response.Length}文字) artifacts={result.ArtifactsDir}");
+            _icon.ShowBalloonTip(3000, "ClaudeNote",
+                $"{heard}ノートに挿入しました ({result.SessionMode}):\n{preview}", ToolTipIcon.Info);
+            Logger.Log($"挿入完了 ({result.SessionMode}, {result.Response.Length}文字) artifacts={result.ArtifactsDir}");
         }
         catch (OperationCanceledException)
         {

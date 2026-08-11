@@ -168,7 +168,13 @@ OneNote のセクション名にワイルドカードでマッチさせ、一致
 
 - 対応表は `%LOCALAPPDATA%\ClaudeNote\sessions.json` (セクション/ページ ID → claude セッション ID)
 - 初回は新規会話を開始し、返ってきた session_id を保存。以降は `--resume` で継続
-- 保存していたセッションが消えていた場合は自動で新規会話にフォールバック
+- **継続に失敗したときは、前のセッションの記録を読ませて引き継がせる**。
+  Claude Code は会話を `~/.claude/projects/<project>/<id>.jsonl` に残しているので、
+  新しいセッションの冒頭でそのファイルを読ませて文脈を復元する
+  (`sessionTakeover: false` で無効化可、指示文は `sessionTakeoverPromptTemplate`)。
+  記録ファイルも見つからない場合のみ、文脈なしの新規会話になる
+- 通知には実際にどうなったかが出る (「会話の続き」「前セッションを引き継ぎ」
+  「新規会話」「新規会話 (文脈なし)」)
 - トレイメニュー「会話セッションをリセット」で全対応を破棄 (次回から新規会話)
 - **既存の Claude Code セッションに接続するには**: `claude --resume` 一覧などでセッション ID を調べ、
   `sessions.json` に手動でエントリを書く。キーは OneNote のセクション ID

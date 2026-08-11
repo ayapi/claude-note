@@ -239,6 +239,36 @@ public sealed class AppConfig
     [JsonPropertyName("floatButtonSize")]
     public int FloatButtonSize { get; set; } = 56;
 
+    /// <summary>
+    /// resume に失敗したとき、前のセッションの記録を新しいセッションに読ませて
+    /// 文脈を引き継がせるか。
+    /// </summary>
+    [JsonPropertyName("sessionTakeover")]
+    public bool SessionTakeover { get; set; } = true;
+
+    /// <summary>
+    /// 引き継ぎ時に本来のプロンプトの前に差し込む指示。
+    /// {sessionId} {sessionFile} {sessionSizeMb} {reason} が置換される。
+    /// </summary>
+    [JsonPropertyName("sessionTakeoverPromptTemplate")]
+    public string[] SessionTakeoverPromptTemplate { get; set; } =
+    [
+        "【前回の続きです】",
+        "セッション {sessionId} の再開に失敗しました（理由: {reason}）。",
+        "そのセッションの記録が次のファイルに JSON Lines 形式で残っています（約 {sessionSizeMb} MB）。",
+        "  {sessionFile}",
+        "まずこれを読んで、これまでのやり取りを引き継いでください。",
+        "読み方の注意:",
+        "- 1 行が 1 メッセージです。base64 画像を含む行は数 MB あるので、ファイル全体を Read してはいけません",
+        "- PowerShell や Bash で message.content の中の type=\"text\" の text だけを抜き出し、",
+        "  末尾 30〜50 メッセージ程度に絞って読むのが確実です",
+        "- 目的は文脈の把握です。相手が誰で、何を学んでいて、直前に何を話していたかが分かれば十分です",
+        "引き継いだうえで、以下の依頼に答えてください。",
+        "----------------",
+    ];
+
+    public string SessionTakeoverPromptText => string.Join("\n", SessionTakeoverPromptTemplate);
+
     /// <summary>セクション名で切り替える設定プロファイル。上から順に評価し最初の一致を適用。</summary>
     [JsonPropertyName("profiles")]
     public ConfigProfile[] Profiles { get; set; } = [];
@@ -272,6 +302,8 @@ public sealed class AppConfig
             NodePath = NodePath,
             SidecarDir = SidecarDir,
             FigureGuide = FigureGuide,
+            SessionTakeover = SessionTakeover,
+            SessionTakeoverPromptTemplate = SessionTakeoverPromptTemplate,
             FloatButton = FloatButton,
             FloatButtonSize = FloatButtonSize,
             VoiceInput = VoiceInput,
