@@ -15,8 +15,23 @@ public sealed record ImageItem(byte[] Data, Rect? PageRectPt);
 public sealed class Selection
 {
     public string PageId = "";
+
+    /// <summary>描画に使えるインク (ISF あり)。バイナリ抜きの XML では空になる。</summary>
     public List<InkItem> Ink { get; } = [];
+
+    /// <summary>描画に使える画像 (データあり)。バイナリ抜きの XML では空になる。</summary>
     public List<ImageItem> Images { get; } = [];
+
+    /// <summary>
+    /// 選択された図の数。バイナリ抜きの XML で中身が取れない場合でも数える。
+    /// 「図が選ばれているか」の判定はこちらを使うこと (Ink.Count で判定すると、
+    /// 軽い XML では常に 0 になり選択を見落とす)。
+    /// </summary>
+    public int VisualCount;
+
+    /// <summary>選択された図の位置 (バイナリの有無に関わらず)。</summary>
+    public List<Rect> VisualRects { get; } = [];
+
     public string Text = "";
 
     /// <summary>選択範囲全体の外接矩形 (pt、ページ座標)。位置情報が一切取れなければ null。</summary>
@@ -25,8 +40,14 @@ public sealed class Selection
     /// <summary>ページ内の全要素の下端など、挿入位置のフォールバック (pt)。</summary>
     public Rect? FallbackBoundsPt;
 
-    public bool IsEmpty => Ink.Count == 0 && Images.Count == 0 && string.IsNullOrWhiteSpace(Text);
-    public bool HasVisual => Ink.Count > 0 || Images.Count > 0;
+    /// <summary>OneNote が何を選択中と報告してきたかの要約 (原因調査用)。</summary>
+    public string Diagnostics = "";
+
+    public bool IsEmpty => VisualCount == 0 && string.IsNullOrWhiteSpace(Text);
+    public bool HasVisual => VisualCount > 0;
+
+    /// <summary>実際に描画できる中身があるか (ISF や画像データが揃っているか)。</summary>
+    public bool HasRenderableData => Ink.Count > 0 || Images.Count > 0;
 }
 
 public static class PageXml
@@ -63,16 +84,28 @@ public static class PageXml
             {
                 case "InkDrawing":
                 case "InkWord":
+                {
                     if (!isSelected) break;
+                    // バイナリ抜きの XML では Data が無い。それでも「選ばれている」事実は
+                    // 数えておかないと、図の選択を見落とす
+                    sel.VisualCount++;
+                    var rect = ReadRect(el);
+                    if (rect is Rect r) sel.VisualRects.Add(r);
                     var isf = ReadData(el);
-                    if (isf != null) sel.Ink.Add(new InkItem(isf, ReadRect(el)));
+                    if (isf != null) sel.Ink.Add(new InkItem(isf, rect));
                     break;
+                }
 
                 case "Image":
+                {
                     if (!isSelected) break;
+                    sel.VisualCount++;
+                    var rect = ReadRect(el);
+                    if (rect is Rect r) sel.VisualRects.Add(r);
                     var img = ReadData(el);
-                    if (img != null) sel.Images.Add(new ImageItem(img, ReadRect(el)));
+                    if (img != null) sel.Images.Add(new ImageItem(img, rect));
                     break;
+                }
 
                 case "T":
                     if (!isSelected) break;
@@ -85,7 +118,25 @@ public static class PageXml
         sel.Text = string.Join("\n", textParts);
         sel.BoundsPt = ComputeSelectionBounds(sel, page, selectedOnly);
         sel.FallbackBoundsPt = ComputePageContentBounds(page);
+        sel.Diagnostics = Describe(page);
         return sel;
+    }
+
+    /// <summary>
+    /// OneNote が selected 属性をどう付けてきたかを要約する。
+    /// 「選択したのに届かない」ときに、選択が消えていたのか、
+    /// 想定と違う付き方をしているのかを切り分けるために使う。
+    /// </summary>
+    private static string Describe(XElement page)
+    {
+        var groups = page.DescendantsAndSelf()
+            .Select(el => (Tag: el.Name.LocalName, Sel: (string?)el.Attribute("selected")))
+            .Where(x => x.Sel is "all" or "partial")
+            .GroupBy(x => $"{x.Tag}={x.Sel}")
+            .OrderByDescending(g => g.Count())
+            .Select(g => $"{g.Key}×{g.Count()}")
+            .ToArray();
+        return groups.Length > 0 ? string.Join(" ", groups) : "選択マーカーなし";
     }
 
     /// <summary>この要素自体が選択に含まれるか (一部選択も含む)。</summary>
@@ -123,11 +174,9 @@ public static class PageXml
     {
         Rect? bounds = null;
 
-        foreach (var r in sel.Ink.Select(i => i.PageRectPt).Concat(sel.Images.Select(i => i.PageRectPt)))
-        {
-            if (r is not Rect rect) continue;
+        // バイナリ抜きでも位置は取れるので VisualRects を使う
+        foreach (var rect in sel.VisualRects)
             bounds = bounds is Rect b ? Rect.Union(b, rect) : rect;
-        }
         if (bounds != null) return bounds;
 
         // ink/画像に位置が無い、またはテキストのみの選択: 選択要素を含む Outline の矩形を使う

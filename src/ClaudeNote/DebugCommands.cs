@@ -83,6 +83,19 @@ internal static class DebugCommands
             Console.WriteLine("OneNote でページが開かれていません");
             return 1;
         }
+
+        // まず軽い取得で選択状態だけ見る (インクの多いページでも速い)
+        var quick = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
+        Console.WriteLine($"OneNote の報告: {quick.Diagnostics}");
+        Console.WriteLine($"判定: 図={quick.VisualCount} textLen={quick.Text.Length} (軽い XML なので中身はまだ無い)");
+        if (!quick.HasVisual)
+        {
+            Console.WriteLine(quick.IsEmpty
+                ? "→ 何も選択されていないと判定"
+                : "→ テキストのみ選択と判定 (図は含まれない)");
+            return 0;
+        }
+
         var sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));
         Console.WriteLine($"selected: ink={sel.Ink.Count} images={sel.Images.Count} textLen={sel.Text.Length} bounds={sel.BoundsPt}");
         if (!sel.HasVisual)
@@ -199,7 +212,8 @@ internal static class DebugCommands
     private static int SelectionTest(string xmlPath)
     {
         var sel = PageXml.ParseSelection(File.ReadAllText(xmlPath));
-        Console.WriteLine($"ink={sel.Ink.Count} images={sel.Images.Count} textLen={sel.Text.Length} bounds={sel.BoundsPt}");
+        Console.WriteLine($"図={sel.VisualCount} ink={sel.Ink.Count} images={sel.Images.Count} " +
+            $"textLen={sel.Text.Length} bounds={sel.BoundsPt}");
         return 0;
     }
 

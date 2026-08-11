@@ -65,6 +65,11 @@ public sealed class AskFlow
             if (render != null)
                 Logger.Log($"音声入力に選択範囲を添付: {render.WidthPx}x{render.HeightPx}px");
         }
+        else
+        {
+            Logger.Log($"音声入力: 添付する選択範囲なし (ink={sel.Ink.Count} img={sel.Images.Count} " +
+                $"textLen={sel.Text.Length} 添付設定={cfg.VoiceIncludesSelection} / OneNoteの報告: {sel.Diagnostics})");
+        }
 
         // 1 段階目: 文字起こしを吹き出しとして先に入れる
         var anchor = PageXml.ComputeInsertAnchor(pageXml, sel, cfg.InsertBelowAll);
@@ -162,7 +167,12 @@ public sealed class AskFlow
         // 掴み続けることになるため、必要なときだけ取りに行く
         var sel = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
         if (sel.IsEmpty)
+        {
+            Logger.Log($"選択なし (OneNoteの報告: {sel.Diagnostics})");
             throw new UserFacingException("OneNote 上で何も選択されていません。なげなわ選択やドラッグで範囲を選んでから実行してください。");
+        }
+        Logger.Log($"選択: ink={sel.Ink.Count} img={sel.Images.Count} textLen={sel.Text.Length} " +
+            $"(OneNoteの報告: {sel.Diagnostics})");
         if (sel.HasVisual)
             sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));  // 描画に ISF/画像が要る
 
