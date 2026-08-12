@@ -52,6 +52,8 @@ internal static class DebugCommands
                     return TakeoverTest(config, args.Length > 1 ? args[1] : null);
                 case "--button-preview":
                     return ButtonPreview(config);
+                case "--ink-nocapture-test":
+                    return InkWithoutCaptureTest(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -251,6 +253,62 @@ internal static class DebugCommands
         Console.WriteLine($"---- 応答 ({sw.Elapsed.TotalSeconds:0}秒) ----");
         Console.WriteLine(result.Text);
         return 0;
+    }
+
+    /// <summary>
+    /// キャプチャ画像が無い (テキストだけを送った) 場合でもインクが描けることを検証する。
+    /// 実際に「棒グラフを描いて説明する」応答が、図だけ抜け落ちて届いた事例の再現。
+    /// </summary>
+    private static int InkWithoutCaptureTest(AppConfig config)
+    {
+        using var onenote = new OneNoteApp();
+        var (sectionId, sectionName) = FindRecentSection(onenote);
+        Console.WriteLine($"対象セクション: {sectionName}");
+
+        var pageId = onenote.CreateNewPage(sectionId);
+        Console.WriteLine($"テストページ作成: {pageId}");
+        try
+        {
+            // 実際に届いた応答と同じ形 (2本の棒 + 赤の差分ブラケット)
+            var response = string.Join("\n",
+            [
+                "上の棒が3か月前、下の棒が今月。",
+                "{{ink: 0,10 200,10 200,32 0,32 0,10 | color=#1F4E79 | width=2}}",
+                "{{ink: 0,52 140,52 140,74 0,74 0,52 | color=#1F4E79 | width=2}}",
+                "{{ink: 140,44 140,84 | color=#D40000 | width=2}}",
+                "{{ink: 200,44 200,84 | color=#D40000 | width=2}}",
+                "{{ink: 140,84 200,84 | color=#D40000 | width=2}}",
+                "赤で挟んだはみ出しが引き算のほう。",
+                "{{ink-overlay: 10,10 50,50 | color=#D40000}}",
+            ]);
+
+            var parts = ResponseParser.Parse(response);
+            var inkParts = parts.OfType<InkPart>().ToList();
+            Console.WriteLine($"パート数: {parts.Count} (うちインク {inkParts.Count}: " +
+                $"流し込み {inkParts.Count(p => !p.Overlay)} / 重ね書き {inkParts.Count(p => p.Overlay)})");
+
+            var sel = new Selection { BoundsPt = new System.Windows.Rect(72, 100, 300, 20) };
+            foreach (var part in parts)
+            {
+                var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: true);
+                // captureMap を null にする = 画像を送っていない状況
+                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [part], config.ResponseColor, null));
+                System.Threading.Thread.Sleep(400);
+            }
+
+            var final = System.Xml.Linq.XDocument.Parse(onenote.GetPageXmlBasic(pageId));
+            var inkCount = final.Descendants(PageXml.One + "InkDrawing").Count();
+            Console.WriteLine($"読み戻し: InkDrawing={inkCount} (期待: 1 以上。重ね書きは無視されるのが正しい)");
+
+            var ok = inkCount >= 1;
+            Console.WriteLine(ok ? "OK: 画像が無くてもインクが描けた" : "NG: インクが描かれていない");
+            return ok ? 0 : 1;
+        }
+        finally
+        {
+            onenote.DeleteHierarchyItem(pageId);
+            Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
+        }
     }
 
     /// <summary>ボタンの各状態を画像に描き出して見た目を確認する。</summary>

@@ -231,10 +231,15 @@ public sealed class AskFlow
     {
         // 重ね書き (補助線) は元の図の上に置くもので、本文の流れとは無関係
         var overlays = parts.OfType<InkPart>().Where(p => p.Overlay).ToList();
-        if (overlays.Count > 0 && map != null)
+        if (overlays.Count > 0)
         {
-            onenote.UpdatePage(PageXml.BuildResponseXml(pageId, new Rect(), [.. overlays], cfg.ResponseColor, map));
-            Logger.Log($"補助線を {overlays.Count} 個重ねました");
+            if (map == null)
+                Logger.Log($"重ね書き {overlays.Count} 個を無視しました (キャプチャ画像が無いため位置を決められない)");
+            else
+            {
+                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, new Rect(), [.. overlays], cfg.ResponseColor, map));
+                Logger.Log($"補助線を {overlays.Count} 個重ねました");
+            }
         }
 
         var flow = parts.Where(p => p is not InkPart { Overlay: true }).ToList();

@@ -264,13 +264,21 @@ public static class PageXml
                         cursorY += imgHeight + 12;
                     break;
 
-                case InkPart ink when captureMap != null:
+                case InkPart ink:
                     FlushText();
                     if (ink.Overlay)
                     {
+                        // 重ね書きは元の図の位置に合わせるものなので、キャプチャが無いと置けない
+                        if (captureMap == null)
+                        {
+                            Logger.Log("重ね書き (ink-overlay) はキャプチャ画像が無いと配置できないため無視しました");
+                            break;
+                        }
                         AppendInk(pageEl, ink, captureMap, overlayOrigin: true, x, cursorY, out _);
                     }
-                    else if (AppendInk(pageEl, ink, captureMap, overlayOrigin: false, x, cursorY, out var inkHeight))
+                    // 流し込みのインクはキャプチャが無くても描ける (座標をポイントとして扱う)
+                    else if (AppendInk(pageEl, ink, captureMap ?? PointScaleMap,
+                        overlayOrigin: false, x, cursorY, out var inkHeight))
                     {
                         cursorY += inkHeight + 12;
                     }
@@ -345,6 +353,13 @@ public static class PageXml
 
     private static string Normalize(string s) =>
         WebUtility.HtmlDecode(s).Replace(" ", "").Replace(" ", "").Replace("\n", "").Replace("\r", "").Trim();
+
+    /// <summary>
+    /// キャプチャ画像が無いときにインクへ使う座標系。
+    /// 送った画像が無ければ Claude は画像上の座標を持ちようがないので、
+    /// 指定された数値をそのままポイントとして扱う。
+    /// </summary>
+    private static readonly CaptureMap PointScaleMap = new(0, 0, PxPerPt: 1.0, PadPx: 0);
 
     private static bool AppendImage(XElement pageEl, ImagePart img, double x, double y, out double heightPt)
     {
