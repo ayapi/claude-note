@@ -59,8 +59,8 @@ public sealed class AskFlow
         RenderResult? render = null;
         if (cfg.VoiceIncludesSelection && sel.HasVisual)
         {
-            // 描画に必要なときだけ ISF/画像込みで取り直す
-            sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));
+            // 描画に必要なときだけインクの実体を取りに行く
+            sel = LoadVisualData(onenote, pageId, sel, cfg, onProgress);
             render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"), cfg.CaptureBackground);
             if (render != null)
                 Logger.Log($"音声入力に選択範囲を添付: {render.WidthPx}x{render.HeightPx}px");
@@ -116,6 +116,41 @@ public sealed class AskFlow
         return new AskResult(result.Text, render?.PngPath, dir, outcome.SessionMode, voiceText);
     }
 
+    /// <summary>
+    /// 選択されたインクの実体を用意する。
+    /// 既定ではコピー経由 (選択したぶんだけ取れるので速い) を試し、
+    /// 取れなければ COM 経由 (ページ全体をシリアライズするため遅い) に退避する。
+    /// </summary>
+    private static Selection LoadVisualData(OneNoteApp onenote, string pageId, Selection light, AppConfig cfg,
+        Action<string>? onProgress)
+    {
+        var pageInk = light.VisualCount;
+        var worthIt = cfg.UseClipboardCapture
+            && light.Images.Count == 0
+            && light.VisualCount >= 1;
+
+        if (worthIt)
+        {
+            onProgress?.Invoke("選択範囲を取得しています…");
+            var isf = ClipboardInk.TryCopySelection();
+            if (isf != null && light.BoundsPt is Rect rect)
+            {
+                // クリップボードの ISF は自前の座標系なので、選択範囲のページ座標へ
+                // 収まるように 1 つの塊として配置する
+                var sel = new Selection { PageId = pageId, Text = light.Text, VisualCount = light.VisualCount };
+                sel.VisualRects.AddRange(light.VisualRects);
+                sel.Ink.Add(new InkItem(isf, rect));
+                sel.BoundsPt = light.BoundsPt;
+                sel.FallbackBoundsPt = light.FallbackBoundsPt;
+                return sel;
+            }
+            Logger.Log("コピー経由で取れなかったため、COM 経由で取得します (時間がかかります)");
+        }
+
+        onProgress?.Invoke($"選択範囲を取得しています… (手書き {pageInk} 個、少し時間がかかります)");
+        return PageXml.ParseSelection(onenote.GetPageXml(pageId));
+    }
+
     private AppConfig ResolveConfig(OneNoteApp onenote, string sectionId)
     {
         if (_config.Profiles.Length == 0 || string.IsNullOrEmpty(sectionId)) return _config;
@@ -164,10 +199,9 @@ public sealed class AskFlow
             Logger.Log($"選択なし (OneNoteの報告: {sel.Diagnostics})");
             throw new UserFacingException("OneNote 上で何も選択されていません。なげなわ選択やドラッグで範囲を選んでから実行してください。");
         }
-        Logger.Log($"選択: ink={sel.Ink.Count} img={sel.Images.Count} textLen={sel.Text.Length} " +
-            $"(OneNoteの報告: {sel.Diagnostics})");
+        Logger.Log($"選択: 図={sel.VisualCount} textLen={sel.Text.Length} (OneNoteの報告: {sel.Diagnostics})");
         if (sel.HasVisual)
-            sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));  // 描画に ISF/画像が要る
+            sel = LoadVisualData(onenote, pageId, sel, cfg, onProgress);
 
         var workspace = ResolveWorkspace(cfg);
         var dir = Path.Combine(workspace, "captures", DateTime.Now.ToString("yyyyMMdd-HHmmss"));

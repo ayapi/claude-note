@@ -54,6 +54,8 @@ internal static class DebugCommands
                     return ButtonPreview(config);
                 case "--ink-nocapture-test":
                     return InkWithoutCaptureTest(config);
+                case "--bench-capture":
+                    return BenchCapture(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -309,6 +311,80 @@ internal static class DebugCommands
             onenote.DeleteHierarchyItem(pageId);
             Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
         }
+    }
+
+    /// <summary>
+    /// キャプチャ処理のどこに時間がかかっているかを段階ごとに計測する。
+    /// 「押してから固まる」の原因を特定するため。
+    /// </summary>
+    private static int BenchCapture(AppConfig config)
+    {
+        using var onenote = new OneNoteApp();
+        var pageId = onenote.GetCurrentPageId();
+        if (string.IsNullOrEmpty(pageId))
+        {
+            Console.WriteLine("OneNote でページが開かれていません");
+            return 1;
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        double Lap(string label)
+        {
+            var ms = sw.Elapsed.TotalMilliseconds;
+            Console.WriteLine($"{label,-40} {ms,8:N0} ms");
+            sw.Restart();
+            return ms;
+        }
+
+        var lightXml = onenote.GetPageXmlSelectionOnly(pageId);
+        Lap($"1) 選択のみ取得 ({lightXml.Length / 1024.0 / 1024.0:0.0} MB)");
+
+        var lightSel = PageXml.ParseSelection(lightXml);
+        Lap($"2) 選択の解析 (図={lightSel.VisualCount})");
+
+        // コピー経由 (新しい既定の経路)
+        if (lightSel.HasVisual && config.UseClipboardCapture)
+        {
+            var isf = ClipboardInk.TryCopySelection();
+            var ms = Lap($"2b) コピー経由でインク取得 ({(isf == null ? "失敗" : $"{isf.Length:N0} bytes")})");
+            if (isf != null && lightSel.BoundsPt is System.Windows.Rect r)
+            {
+                var quick = new Selection { PageId = pageId, VisualCount = lightSel.VisualCount };
+                quick.Ink.Add(new InkItem(isf, r));
+                quick.BoundsPt = lightSel.BoundsPt;
+                var qpng = Path.Combine(Path.GetTempPath(), "claudenote-bench-clip.png");
+                var qr = SelectionRenderer.RenderToPng(quick, qpng, config.CaptureBackground);
+                Lap($"2c) コピー経由で描画 ({qr?.WidthPx}x{qr?.HeightPx}px)");
+                Console.WriteLine($"    → コピー経由の合計: {ms + 0:N0} ms + 描画  / 画像: {qpng}");
+            }
+            Console.WriteLine();
+            Console.WriteLine("--- 以下は比較用の従来経路 (COM でページ全体を取得) ---");
+        }
+
+        // 選択が無いときは、ページ全体を対象にして最悪ケースを測る
+        var wholePage = !lightSel.HasVisual;
+        if (wholePage)
+            Console.WriteLine("   (選択が無いので、ページ全体を対象に最悪ケースを測ります)");
+
+        var fullXml = onenote.GetPageXml(pageId);
+        Lap($"3) ISF込みで取得 ({fullXml.Length / 1024.0 / 1024.0:0.0} MB)");
+
+        var sel = wholePage ? PageXml.ParseAll(fullXml) : PageXml.ParseSelection(fullXml);
+        Lap($"4) ISF込みの解析 (ink={sel.Ink.Count})");
+        if (sel.Ink.Count == 0)
+        {
+            Console.WriteLine("インクが無いため、ここまで。");
+            return 0;
+        }
+
+        var outPng = Path.Combine(Path.GetTempPath(), "claudenote-bench.png");
+        var render = SelectionRenderer.RenderToPng(sel, outPng, config.CaptureBackground);
+        Lap($"5) 描画 ({render?.WidthPx}x{render?.HeightPx}px)");
+
+        Console.WriteLine();
+        var pageInk = System.Xml.Linq.XDocument.Parse(lightXml).Descendants(PageXml.One + "InkDrawing").Count();
+        Console.WriteLine($"ページ全体のインク数: {pageInk} / 選択されたインク: {sel.Ink.Count}");
+        return 0;
     }
 
     /// <summary>ボタンの各状態を画像に描き出して見た目を確認する。</summary>

@@ -62,6 +62,19 @@ public sealed class AppConfig
     public string ResponseColor { get; set; } = "#1F4E79";
 
     /// <summary>
+    /// 選択範囲のインクを「OneNote にコピーさせてクリップボードから受け取る」方式で取るか。
+    /// COM から取ると選択が何本でもページ全体をシリアライズするため、手書きの多い
+    /// ページでは 100 秒を超える (実測 6500本で 108 秒 → コピー経由なら 3 秒)。
+    /// 一時的にクリップボードを使うので、無効にすると従来どおり COM から取る。
+    /// </summary>
+    [JsonPropertyName("useClipboardCapture")]
+    public bool UseClipboardCapture { get; set; } = true;
+
+    /// <summary>コピー経由に切り替える手書きの本数のしきい値 (ページ全体の本数で判断)。</summary>
+    [JsonPropertyName("clipboardCaptureThreshold")]
+    public int ClipboardCaptureThreshold { get; set; } = 200;
+
+    /// <summary>
     /// Claude に送るキャプチャ画像の背景。"auto" (既定) はインクの明るさから
     /// 白か暗色かを選ぶ。"white" / "black" / "transparent" / "#RRGGBB" も指定可。
     /// 透明にすると、表示側の合成色によっては黒インクが読めなくなる。
@@ -304,6 +317,8 @@ public sealed class AppConfig
             TimeoutSeconds = TimeoutSeconds,
             ResponseColor = ResponseColor,
             CaptureBackground = CaptureBackground,
+            UseClipboardCapture = UseClipboardCapture,
+            ClipboardCaptureThreshold = ClipboardCaptureThreshold,
             InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
             SessionScope = SessionScope,

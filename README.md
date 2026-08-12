@@ -62,6 +62,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `timeoutSeconds` | Claude 応答のタイムアウト |
 | `responseColor` | 挿入テキストの色 (CSS hex)。既定は紺色 `#1F4E79` |
 | `captureBackground` | 送信する画像の背景。`auto` (既定) はインクの明るさで白/暗色を選ぶ。`white` / `black` / `transparent` / `#RRGGBB` も可 |
+| `useClipboardCapture` | 選択インクをコピー経由で取得する (既定 true、下記)。false で従来の COM 経由 |
 | `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowSelection` は選択範囲の真下。x 座標はどちらも選択範囲の左端に揃う |
 | `keepArtifacts` | キャプチャ PNG と応答を `%LOCALAPPDATA%\ClaudeNote\workspace\captures` に残す |
 | `sessionScope` | 会話継続の単位。`section` (既定) / `page` / `off` (毎回新規) |
@@ -237,6 +238,35 @@ Node プロセス。Claude Agent SDK の `query()` に `resume` / `additionalDir
 - `GetHierarchy` / `GetPageContent` はスキーマ既定値が古いため `xs2013` を明示指定する
 - 手書きはストローク断片ごとに `one:InkDrawing` として保存されており、
   各要素の `one:Position`/`one:Size` (pt) で再配置して合成する
+
+## 選択インクの取得方法 (速度)
+
+OneNote の `GetPageContent` で ISF を取ると、**選択が何本でもページ全体を
+シリアライズする**ため、手書きの多いページでは極端に遅くなる:
+
+| ページ全体の手書き | COM 経由 |
+|---|---|
+| 453 本 | 約 16 秒 |
+| 6,493 本 | **約 109 秒** |
+
+そこで既定では、OneNote に**選択範囲をコピーさせてクリップボードから ISF を
+受け取る**。選択したぶんだけで済むのでページの大きさに影響されない。
+
+実測 (6,493 本のページで 1,280 本を選択):
+
+```
+コピー経由: 選択判定 1.3s + コピー 2.7〜8.5s + 描画 0.4s  ≒ 4〜10 秒
+COM 経由 : 選択判定 1.3s + 取得 108.7s + 描画 0.2s        ≒ 110 秒
+```
+
+生成される画像は両者で完全に同一。仕組み上の注意:
+
+- 一時的に**クリップボードを使う** (元の内容は失われる)
+- OneNote が前面でないときは前面に出す (選択やスクロールは変えない)
+- 取得できなければ自動で COM 経由に退避する
+- 画像を含む選択は COM 経由 (クリップボードからは ISF のみ取得)
+
+`useClipboardCapture: false` で従来どおり COM 経由にできる。
 
 ## 回答の挿入位置
 
