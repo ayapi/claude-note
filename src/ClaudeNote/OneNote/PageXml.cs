@@ -437,6 +437,11 @@ public static class PageXml
                 // 補助線: キャプチャ画像上の座標をそのまま元の選択範囲の位置へ戻す
                 posX = map.OriginXPt + (boundsPx.X - map.PadPx) / map.PxPerPt;
                 posY = map.OriginYPt + (boundsPx.Y - map.PadPx) / map.PxPerPt;
+                // ずれの原因を後から追えるよう、計算過程をすべて残す
+                Logger.Log($"重ね書きの変換: 画像上={boundsPx.X:0.#},{boundsPx.Y:0.#} " +
+                    $"({boundsPx.Width:0.#}x{boundsPx.Height:0.#}px) → ページ上={posX:0.#},{posY:0.#} " +
+                    $"({widthPt:0.#}x{heightPt:0.#}pt) [原点={map.OriginXPt:0.#},{map.OriginYPt:0.#} " +
+                    $"倍率={map.PxPerPt:0.###}px/pt 余白={map.PadPx}px]");
             }
             else
             {
