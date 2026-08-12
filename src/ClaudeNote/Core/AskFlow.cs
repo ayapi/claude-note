@@ -93,7 +93,8 @@ public sealed class AskFlow
             .Replace("{figureGuide}", cfg.FigureGuideText);
 
         var addDirs = cfg.ExpandedAddDirs;
-        var outcome = await AskWithContinuityAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
+        // 音声入力のプロンプトは継続用と初回用を分けていないので、そのまま使う
+        var outcome = await AskWithContinuityAsync(cfg, _ => prompt, runCwd, resumeId, addDirs, onProgress, ct);
         var result = outcome.Result;
 
         if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
@@ -192,10 +193,10 @@ public sealed class AskFlow
         var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
         var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
 
-        var prompt = BuildPrompt(cfg, sel, render, resumed: resumeId != null);
-
         var addDirs = cfg.ExpandedAddDirs;
-        var outcome = await AskWithContinuityAsync(cfg, prompt, runCwd, resumeId, addDirs, onProgress, ct);
+        var outcome = await AskWithContinuityAsync(cfg,
+            resumed => BuildPrompt(cfg, sel, render, resumed),
+            runCwd, resumeId, addDirs, onProgress, ct);
         var result = outcome.Result;
 
         // -p --resume は毎回新しいセッション ID にフォークする実装もあるため、常に最新 ID を保存する
@@ -269,16 +270,21 @@ public sealed class AskFlow
     /// 会話の継続を試み、失敗したら前セッションの記録を読ませて引き継がせる。
     /// 黙って新規会話に落とすと、家庭教師がそれまでの学習内容を失ったまま答えてしまう。
     /// </summary>
-    private static async Task<AskOutcome> AskWithContinuityAsync(AppConfig cfg, string prompt, string cwd,
-        string? resumeId, string[] addDirs, Action<string>? onProgress, CancellationToken ct)
+    /// <param name="buildPrompt">
+    /// 引数は「会話の続きとして扱うか」。文脈のない新規会話に落ちるときは、
+    /// 「続きだよ」と書かれた継続用プロンプトではなく初回用を使う必要がある。
+    /// </param>
+    private static async Task<AskOutcome> AskWithContinuityAsync(AppConfig cfg, Func<bool, string> buildPrompt,
+        string cwd, string? resumeId, string[] addDirs, Action<string>? onProgress, CancellationToken ct)
     {
         if (resumeId == null)
-            return new AskOutcome(await AskEngineAsync(cfg, prompt, cwd, null, addDirs, onProgress, ct), "新規会話");
+            return new AskOutcome(
+                await AskEngineAsync(cfg, buildPrompt(false), cwd, null, addDirs, onProgress, ct), "新規会話");
 
         try
         {
             return new AskOutcome(
-                await AskEngineAsync(cfg, prompt, cwd, resumeId, addDirs, onProgress, ct), "会話の続き");
+                await AskEngineAsync(cfg, buildPrompt(true), cwd, resumeId, addDirs, onProgress, ct), "会話の続き");
         }
         catch (SessionResumeException ex)
         {
@@ -290,8 +296,10 @@ public sealed class AskFlow
                 Logger.Log(cfg.SessionTakeover
                     ? $"セッション記録が見つからないため、文脈なしの新規会話で続けます ({resumeId})"
                     : "引き継ぎが無効なため、新規会話で続けます");
+                // 文脈が無いので「続きだよ」ではなく初回用のプロンプトで聞く
                 return new AskOutcome(
-                    await AskEngineAsync(cfg, prompt, cwd, null, addDirs, onProgress, ct), "新規会話 (文脈なし)");
+                    await AskEngineAsync(cfg, buildPrompt(false), cwd, null, addDirs, onProgress, ct),
+                    "新規会話 (文脈なし)");
             }
 
             // 記録ファイルを読めるようにディレクトリを許可に加える
@@ -306,8 +314,9 @@ public sealed class AskFlow
 
             Logger.Log($"前セッションの記録を読ませて引き継ぎます: {file}");
             onProgress?.Invoke("前回の記録を読み込んで引き継いでいます…");
+            // 記録から文脈を復元するので、継続用のプロンプトで聞いてよい
             return new AskOutcome(
-                await AskEngineAsync(cfg, takeover + "\n" + prompt, cwd, null, withArchive, onProgress, ct),
+                await AskEngineAsync(cfg, takeover + "\n" + buildPrompt(true), cwd, null, withArchive, onProgress, ct),
                 "前セッションを引き継ぎ");
         }
     }
@@ -326,15 +335,19 @@ public sealed class AskFlow
                 ? ""
                 : $"\n選択範囲に含まれていたテキスト:\n---\n{sel.Text}\n---";
             var template = resumed ? cfg.ResumePromptTemplateText : cfg.PromptTemplateText;
+            Logger.Log($"使用プロンプト: {(resumed ? "resumePromptTemplate" : "promptTemplate")} ({template.Length}文字)");
             return template
                 .Replace("{image}", render.PngPath)
                 .Replace("{figureGuide}", cfg.FigureGuideText)
                 .Replace("{textSection}", textSection);
         }
         if (!string.IsNullOrWhiteSpace(sel.Text))
+        {
+            Logger.Log("使用プロンプト: textOnlyPromptTemplate");
             return cfg.TextOnlyPromptTemplateText
                 .Replace("{figureGuide}", cfg.FigureGuideText)
                 .Replace("{text}", sel.Text);
+        }
 
         throw new UserFacingException("選択範囲から読み取れる内容がありませんでした。");
     }
