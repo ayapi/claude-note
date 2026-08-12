@@ -29,6 +29,12 @@ public sealed class Selection
     /// </summary>
     public int VisualCount;
 
+    /// <summary>選択された手書き (InkDrawing / InkWord) の数。</summary>
+    public int SelectedInkCount;
+
+    /// <summary>選択された画像の数。画像はコピー経由では取れないので経路の判断に使う。</summary>
+    public int SelectedImageCount;
+
     /// <summary>選択された図の位置 (バイナリの有無に関わらず)。</summary>
     public List<Rect> VisualRects { get; } = [];
 
@@ -89,6 +95,7 @@ public static class PageXml
                     // バイナリ抜きの XML では Data が無い。それでも「選ばれている」事実は
                     // 数えておかないと、図の選択を見落とす
                     sel.VisualCount++;
+                    sel.SelectedInkCount++;
                     var rect = ReadRect(el);
                     if (rect is Rect r) sel.VisualRects.Add(r);
                     var isf = ReadData(el);
@@ -100,6 +107,7 @@ public static class PageXml
                 {
                     if (!isSelected) break;
                     sel.VisualCount++;
+                    sel.SelectedImageCount++;
                     var rect = ReadRect(el);
                     if (rect is Rect r) sel.VisualRects.Add(r);
                     var img = ReadData(el);

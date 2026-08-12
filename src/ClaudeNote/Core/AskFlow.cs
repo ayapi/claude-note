@@ -83,9 +83,17 @@ public sealed class AskFlow
         var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
         var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
 
-        var voiceSelection = render != null
-            ? $"あわせて、ノート上で選択されていた範囲の画像を送ります。まず {render.PngPath} を Read ツールで読み取ってから答えてください。"
-            : "";
+        // 選択されていたものを必ず添える。テキスト選択が落ちていて
+        // 「本文が空で届いていない」と言われる不具合があった
+        var selectionParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(sel.Text))
+            selectionParts.Add($"ノート上で選択されていたテキスト:\n---\n{sel.Text}\n---");
+        if (render != null)
+            selectionParts.Add($"あわせて、選択範囲の画像を送ります。まず {render.PngPath} を Read ツールで読み取ってから答えてください。");
+        var voiceSelection = selectionParts.Count > 0
+            ? string.Join("\n", selectionParts)
+            : "（ノート上では何も選択されていません。発言だけで答えてください）";
+        Logger.Log($"音声入力に添える選択内容: テキスト {sel.Text.Length}文字 / 画像 {(render != null ? "あり" : "なし")}");
         var prompt = cfg.VoicePromptTemplateText
             .Replace("{voice}", voiceText)
             .Replace("{voiceSelection}", voiceSelection)
@@ -124,15 +132,17 @@ public sealed class AskFlow
     private static Selection LoadVisualData(OneNoteApp onenote, string pageId, Selection light, AppConfig cfg,
         Action<string>? onProgress)
     {
-        var pageInk = light.VisualCount;
+        // 画像が選択に含まれるときはコピー経由ではインクが来ないので、待つだけ無駄
         var worthIt = cfg.UseClipboardCapture
-            && light.Images.Count == 0
-            && light.VisualCount >= 1;
+            && light.SelectedImageCount == 0
+            && light.SelectedInkCount >= 1;
+        if (cfg.UseClipboardCapture && !worthIt)
+            Logger.Log($"コピー経由を使いません (手書き {light.SelectedInkCount} / 画像 {light.SelectedImageCount})");
 
         if (worthIt)
         {
             onProgress?.Invoke("選択範囲を取得しています…");
-            var isf = ClipboardInk.TryCopySelection();
+            var isf = ClipboardInk.TryCopySelection(cfg.ClipboardTimeoutMs);
             if (isf != null && light.BoundsPt is Rect rect)
             {
                 // コピーで得た ISF の外接矩形と、OneNote が報告する選択範囲の矩形が
@@ -164,7 +174,7 @@ public sealed class AskFlow
             Logger.Log("コピー経由で取れなかったため、COM 経由で取得します (時間がかかります)");
         }
 
-        onProgress?.Invoke($"選択範囲を取得しています… (手書き {pageInk} 個、少し時間がかかります)");
+        onProgress?.Invoke($"選択範囲を取得しています… (手書き {light.SelectedInkCount} 個、少し時間がかかります)");
         return PageXml.ParseSelection(onenote.GetPageXml(pageId));
     }
 

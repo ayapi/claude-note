@@ -70,9 +70,9 @@ public sealed class AppConfig
     [JsonPropertyName("useClipboardCapture")]
     public bool UseClipboardCapture { get; set; } = true;
 
-    /// <summary>コピー経由に切り替える手書きの本数のしきい値 (ページ全体の本数で判断)。</summary>
-    [JsonPropertyName("clipboardCaptureThreshold")]
-    public int ClipboardCaptureThreshold { get; set; } = 200;
+    /// <summary>コピー経由を待つ上限 (ミリ秒)。実測 3〜9 秒なので、これを超えたら COM 経由へ退避する。</summary>
+    [JsonPropertyName("clipboardTimeoutMs")]
+    public int ClipboardTimeoutMs { get; set; } = 12000;
 
     /// <summary>
     /// Claude に送るキャプチャ画像の背景。"auto" (既定) はインクの明るさから
@@ -318,7 +318,7 @@ public sealed class AppConfig
             ResponseColor = ResponseColor,
             CaptureBackground = CaptureBackground,
             UseClipboardCapture = UseClipboardCapture,
-            ClipboardCaptureThreshold = ClipboardCaptureThreshold,
+            ClipboardTimeoutMs = ClipboardTimeoutMs,
             InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
             SessionScope = SessionScope,

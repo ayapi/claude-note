@@ -56,6 +56,8 @@ internal static class DebugCommands
                     return InkWithoutCaptureTest(config);
                 case "--bench-capture":
                     return BenchCapture(config);
+                case "--voice-prompt-test":
+                    return VoicePromptTest(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -311,6 +313,58 @@ internal static class DebugCommands
             onenote.DeleteHierarchyItem(pageId);
             Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
         }
+    }
+
+    /// <summary>
+    /// 音声入力のプロンプトに、いま選択している内容が実際に入るかを確認する。
+    /// テキスト選択が丸ごと落ちていた不具合の再発防止。
+    /// </summary>
+    private static int VoicePromptTest(AppConfig config)
+    {
+        using var onenote = new OneNoteApp();
+        var (pageId, sectionId) = onenote.GetCurrentContext();
+        if (string.IsNullOrEmpty(pageId)) { Console.WriteLine("ページが開かれていません"); return 1; }
+
+        var cfg = config.Profiles.Length > 0 && !string.IsNullOrEmpty(sectionId)
+            ? config.ResolveForSection(onenote.GetSectionName(sectionId), out _)
+            : config;
+
+        var sel = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
+        Console.WriteLine($"選択: 手書き={sel.SelectedInkCount} 画像={sel.SelectedImageCount} テキスト={sel.Text.Length}文字");
+
+        // 選択が無いときは、配線が正しいかを合成テキストで確かめる
+        if (string.IsNullOrWhiteSpace(sel.Text))
+        {
+            sel.Text = "想定投資 1人月 × 80万円 = 80万円 / ROI = 営業利益 ÷ 投資 = 2137.5%";
+            Console.WriteLine($"(選択が無いので合成テキストで検証: {sel.Text.Length}文字)");
+        }
+
+        // AskFlow.RunVoiceAsync と同じ組み立て
+        var selectionParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(sel.Text))
+            selectionParts.Add($"ノート上で選択されていたテキスト:\n---\n{sel.Text}\n---");
+        var voiceSelection = selectionParts.Count > 0
+            ? string.Join("\n", selectionParts)
+            : "（ノート上では何も選択されていません。発言だけで答えてください）";
+
+        var prompt = cfg.VoicePromptTemplateText
+            .Replace("{voice}", "これで合ってるか見て")
+            .Replace("{voiceSelection}", voiceSelection)
+            .Replace("{image}", "")
+            .Replace("{figureGuide}", cfg.FigureGuideText);
+
+        var included = !string.IsNullOrWhiteSpace(sel.Text) && prompt.Contains(sel.Text);
+        Console.WriteLine();
+        Console.WriteLine("---- プロンプトの該当箇所 ----");
+        var idx = prompt.IndexOf("選択されていたテキスト", StringComparison.Ordinal);
+        Console.WriteLine(idx >= 0
+            ? prompt.Substring(idx, Math.Min(300, prompt.Length - idx))
+            : "(選択テキストの記載なし)");
+        Console.WriteLine();
+        Console.WriteLine(sel.Text.Length == 0
+            ? "テキスト選択が無いため判定不能 (テキストを選択して再実行してください)"
+            : included ? "OK: 選択テキストがプロンプトに含まれています" : "NG: 選択テキストが落ちています");
+        return sel.Text.Length == 0 ? 0 : (included ? 0 : 1);
     }
 
     /// <summary>
