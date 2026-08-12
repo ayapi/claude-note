@@ -135,6 +135,23 @@ public sealed class AskFlow
             var isf = ClipboardInk.TryCopySelection();
             if (isf != null && light.BoundsPt is Rect rect)
             {
+                // コピーで得た ISF の外接矩形と、OneNote が報告する選択範囲の矩形が
+                // 相似でないと、引き伸ばしで歪んで重ね書きの座標がずれる。必ず記録する
+                try
+                {
+                    var isfBounds = InkBuilder.GetBounds(isf);
+                    var sx = isfBounds.Width > 0.05 ? rect.Width / isfBounds.Width : 0;
+                    var sy = isfBounds.Height > 0.05 ? rect.Height / isfBounds.Height : 0;
+                    var skew = sy > 0 ? sx / sy : 0;
+                    Logger.Log($"座標対応: ISF={isfBounds.Width:0.#}x{isfBounds.Height:0.#} " +
+                        $"選択範囲={rect.Width:0.#}x{rect.Height:0.#}pt sx={sx:0.####} sy={sy:0.####} 比={skew:0.####}" +
+                        (Math.Abs(skew - 1) > 0.01 ? "  ← 相似でないため重ね書きがずれます" : ""));
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"座標対応の確認に失敗: {ex.Message}");
+                }
+
                 // クリップボードの ISF は自前の座標系なので、選択範囲のページ座標へ
                 // 収まるように 1 つの塊として配置する
                 var sel = new Selection { PageId = pageId, Text = light.Text, VisualCount = light.VisualCount };

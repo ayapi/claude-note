@@ -130,6 +130,15 @@ public static class SelectionRenderer
                 var sx = natural.Width > 0.05 ? target.Width / natural.Width : defaultScale;
                 var sy = natural.Height > 0.05 ? target.Height / natural.Height : defaultScale;
 
+                // 縦横の倍率がずれていると絵が歪み、重ね書きの座標も合わなくなる。
+                // 1 つの塊として貼る (コピー経由) ときだけ問題になるので、そのときは記録する
+                if (positioned.Count == 1 && Math.Abs(sx - sy) > 0.01 * Math.Max(sx, sy))
+                {
+                    Logger.Log($"インクの縦横比が一致しません: natural={natural.Width:0.#}x{natural.Height:0.#} " +
+                        $"target={target.Width:0.#}x{target.Height:0.#} sx={sx:0.####} sy={sy:0.####} " +
+                        $"(比 {sx / sy:0.###}) → 重ね書きの位置がずれます");
+                }
+
                 var m = Matrix.Identity;
                 m.Translate(-natural.X, -natural.Y);
                 m.Scale(sx, sy);
