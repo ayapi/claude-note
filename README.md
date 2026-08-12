@@ -4,7 +4,8 @@ OneNote の手書きノートを Claude に読ませて、応答をノートに�
 
 OneNote 上で範囲を選択してホットキー(既定: `Ctrl+Alt+A`)を押すと:
 
-1. 選択中の手書き(ink)・画像を、内部データ(ISF バイナリ)から**透明 PNG** にレンダリング
+1. 選択中の手書き(ink)・画像を、内部データ(ISF バイナリ)から **PNG** にレンダリング
+   (背景は既定で自動選択。透明にすると表示側の合成色しだいで黒インクが読めなくなる)
 2. **Claude Agent SDK**(常駐 Node サイドカー)経由で Claude に送信(**Claude Code のサブスク認証をそのまま利用**、API キー不要)
 3. Claude の応答テキストを、**選択範囲の真下**に色付きテキストとして挿入
 
@@ -60,6 +61,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `claudePath` | claude CLI のフルパス。`null` なら PATH から探す |
 | `timeoutSeconds` | Claude 応答のタイムアウト |
 | `responseColor` | 挿入テキストの色 (CSS hex)。既定は紺色 `#1F4E79` |
+| `captureBackground` | 送信する画像の背景。`auto` (既定) はインクの明るさで白/暗色を選ぶ。`white` / `black` / `transparent` / `#RRGGBB` も可 |
 | `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowSelection` は選択範囲の真下。x 座標はどちらも選択範囲の左端に揃う |
 | `keepArtifacts` | キャプチャ PNG と応答を `%LOCALAPPDATA%\ClaudeNote\workspace\captures` に残す |
 | `sessionScope` | 会話継続の単位。`section` (既定) / `page` / `off` (毎回新規) |

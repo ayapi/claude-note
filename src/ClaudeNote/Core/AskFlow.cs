@@ -61,7 +61,7 @@ public sealed class AskFlow
         {
             // 描画に必要なときだけ ISF/画像込みで取り直す
             sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));
-            render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"));
+            render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"), cfg.CaptureBackground);
             if (render != null)
                 Logger.Log($"音声入力に選択範囲を添付: {render.WidthPx}x{render.HeightPx}px");
         }
@@ -176,7 +176,7 @@ public sealed class AskFlow
         RenderResult? render = null;
         if (sel.HasVisual)
         {
-            render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"));
+            render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"), cfg.CaptureBackground);
             if (render != null)
                 Logger.Log($"キャプチャ: {render.WidthPx}x{render.HeightPx}px ink={render.InkCount} img={render.ImageCount} skip={render.SkippedInk}");
         }

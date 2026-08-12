@@ -62,6 +62,14 @@ public sealed class AppConfig
     public string ResponseColor { get; set; } = "#1F4E79";
 
     /// <summary>
+    /// Claude に送るキャプチャ画像の背景。"auto" (既定) はインクの明るさから
+    /// 白か暗色かを選ぶ。"white" / "black" / "transparent" / "#RRGGBB" も指定可。
+    /// 透明にすると、表示側の合成色によっては黒インクが読めなくなる。
+    /// </summary>
+    [JsonPropertyName("captureBackground")]
+    public string CaptureBackground { get; set; } = "auto";
+
+    /// <summary>
     /// 回答の挿入位置。"belowAll" (既定) はページ全体の下端 (空白部分) に置くため
     /// 既存の内容と重ならない。"belowSelection" は選択範囲の真下に置く。
     /// x 座標はどちらも選択範囲の左端に揃える。
@@ -294,6 +302,7 @@ public sealed class AppConfig
             ClaudePath = ClaudePath,
             TimeoutSeconds = TimeoutSeconds,
             ResponseColor = ResponseColor,
+            CaptureBackground = CaptureBackground,
             InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
             SessionScope = SessionScope,

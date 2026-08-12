@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Ink;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Color = System.Windows.Media.Color;
+using ColorConverter = System.Windows.Media.ColorConverter;
 
 namespace ClaudeNote;
 
@@ -25,7 +27,7 @@ public static class SelectionRenderer
     private const double MaxLongEdgePx = 2200; // Claude に送る画像の長辺上限
     private const double PadPx = 12;
 
-    public static RenderResult? RenderToPng(Selection sel, string outPath)
+    public static RenderResult? RenderToPng(Selection sel, string outPath, string background = "auto")
     {
         var positioned = new List<(StrokeCollection Strokes, Rect Natural, Rect RectPt)>();
         var unpositioned = new List<(StrokeCollection Strokes, Rect Natural)>();
@@ -108,9 +110,16 @@ public static class SelectionRenderer
             rPt.Width * pxPerPt,
             rPt.Height * pxPerPt);
 
+        var backColor = ResolveBackground(background, positioned.Select(p => p.Strokes));
+
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
+            // 背景を必ず塗る。透明のままだと表示側の合成色しだいで
+            // 黒インクが暗い背景に溶けて読めなくなる
+            if (backColor is Color bg)
+                dc.DrawRectangle(new SolidColorBrush(bg), null, new Rect(0, 0, widthPx, heightPx));
+
             foreach (var (bitmap, rectPt) in images)
                 dc.DrawImage(bitmap, Map(rectPt));
 
@@ -144,5 +153,52 @@ public static class SelectionRenderer
 
         var map = new CaptureMap(bounds.X, bounds.Y, pxPerPt, PadPx);
         return new RenderResult(outPath, widthPx, heightPx, positioned.Count, skipped, images.Count, map);
+    }
+
+    /// <summary>
+    /// 背景色を決める。"auto" はインクの明るさから判断し、白いペンで書かれていれば
+    /// 暗い背景、そうでなければ白背景にする (ダークモードで書いたノートでも読めるように)。
+    /// </summary>
+    private static Color? ResolveBackground(string setting, IEnumerable<StrokeCollection> strokes)
+    {
+        switch ((setting ?? "auto").Trim().ToLowerInvariant())
+        {
+            case "transparent" or "none":
+                return null;
+            case "white":
+                return Colors.White;
+            case "black":
+                return Color.FromRgb(0x1E, 0x1E, 0x1E);
+            case "auto":
+                break;
+            default:
+                try
+                {
+                    if (ColorConverter.ConvertFromString(setting) is Color c) return c;
+                }
+                catch { }
+                return Colors.White;
+        }
+
+        // インクの平均的な明るさを見る。太い線・長い線ほど印象を左右するので
+        // ストローク数で単純平均する
+        double sum = 0;
+        var count = 0;
+        foreach (var collection in strokes)
+        {
+            foreach (Stroke s in collection)
+            {
+                var c = s.DrawingAttributes.Color;
+                // 知覚上の明るさ (0=黒, 1=白)
+                sum += (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255.0;
+                count++;
+            }
+        }
+        if (count == 0) return Colors.White;
+
+        var luminance = sum / count;
+        var dark = luminance > 0.6;   // 明るいインクが主 = 暗い背景に書かれたノート
+        Logger.Log($"キャプチャ背景: {(dark ? "暗色" : "白")} (インクの明るさ {luminance:0.00})");
+        return dark ? Color.FromRgb(0x1E, 0x1E, 0x1E) : Colors.White;
     }
 }
