@@ -24,6 +24,10 @@ public sealed class FloatButtonForm : Form
     private static readonly Color CancelColor = ColorTranslator.FromHtml("#C0392B");
     private static readonly Color RecordColor = ColorTranslator.FromHtml("#D93025");
     private static readonly Color RecordBack = ColorTranslator.FromHtml("#FDECEA");
+    private static readonly Color WarnColor = ColorTranslator.FromHtml("#B26A00");
+    private static readonly Color WarnBack = ColorTranslator.FromHtml("#FFF4E0");
+    private static readonly Color OkColor = ColorTranslator.FromHtml("#1E7B34");
+    private static readonly Color OkBack = ColorTranslator.FromHtml("#EAF6EC");
 
     private readonly Action _onTap;
     private readonly System.Windows.Forms.Timer _spinTimer;
@@ -37,6 +41,10 @@ public sealed class FloatButtonForm : Form
     private bool _recording;
     private bool _pressed;
     private bool _longPressFired;
+    private bool _flashing;
+    private bool _flashOk;
+    private string _flashMessage = "";
+    private readonly System.Windows.Forms.Timer _flashTimer = new();
     private DateTime _lastPointerAt = DateTime.MinValue;
     private float _angle;
     private float _pulse;
@@ -59,6 +67,15 @@ public sealed class FloatButtonForm : Form
             SetRecording(true);
             LongPressStarted?.Invoke();
         };
+        _flashTimer.Tick += (_, _) =>
+        {
+            _flashTimer.Stop();
+            _flashing = false;
+            _flashMessage = "";
+            UpdateTip();
+            Invalidate();
+        };
+
         SetLongPress(longPressMs);
         UpdateTip();
         FormBorderStyle = FormBorderStyle.None;
@@ -215,6 +232,22 @@ public sealed class FloatButtonForm : Form
     /// <summary>録音中かどうか (表示制御の判断に使う)。</summary>
     public bool IsRecording => _recording;
 
+    /// <summary>
+    /// 結果をボタン自体に短時間表示する。通知バルーンは見落としやすく、
+    /// OS 側の設定で出ないこともあるため、押した本人が必ず気づけるようにする。
+    /// </summary>
+    public void Flash(bool ok, string message, int milliseconds = 3000)
+    {
+        _flashOk = ok;
+        _flashMessage = message;
+        _flashing = true;
+        _flashTimer.Interval = Math.Max(milliseconds, 500);
+        _flashTimer.Stop();
+        _flashTimer.Start();
+        UpdateTip();
+        Invalidate();
+    }
+
     /// <summary>長押しの判定時間を変更する。0 以下なら音声入力を無効にする (設定の再読み込み用)。</summary>
     public void SetLongPress(int longPressMs)
     {
@@ -227,6 +260,11 @@ public sealed class FloatButtonForm : Form
     /// <summary>いまの状態と、押すと何が起きるかを説明する。</summary>
     private void UpdateTip()
     {
+        if (_flashing && !string.IsNullOrEmpty(_flashMessage))
+        {
+            _tip.SetToolTip(this, _flashMessage);
+            return;
+        }
         var text = _recording
             ? "録音中… 指を離すと文字起こしして送ります"
             : _busy
@@ -289,10 +327,33 @@ public sealed class FloatButtonForm : Form
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var size = ClientSize.Width;
 
-        using (var back = new SolidBrush(_recording ? RecordBack : (_hover && !_busy ? HoverBack : Color.White)))
+        var flashing = _flashing && !_busy && !_recording;
+        var backFill = _recording ? RecordBack
+            : flashing ? (_flashOk ? OkBack : WarnBack)
+            : (_hover && !_busy ? HoverBack : Color.White);
+        var ringColor = _recording ? RecordColor
+            : flashing ? (_flashOk ? OkColor : WarnColor)
+            : RingColor;
+
+        using (var back = new SolidBrush(backFill))
             g.FillEllipse(back, 0, 0, size - 1, size - 1);
-        using (var ring = new Pen(_recording ? RecordColor : RingColor, _recording ? 2.5f : 1.5f))
+        using (var ring = new Pen(ringColor, _recording || flashing ? 2.5f : 1.5f))
             g.DrawEllipse(ring, 1, 1, size - 3, size - 3);
+
+        // 結果表示中は記号だけを大きく出す (押した結果に必ず気づけるように)
+        if (flashing)
+        {
+            var glyph = _flashOk ? "✓" : "!";
+            using var font = new Font("Segoe UI", size * 0.42f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var brush = new SolidBrush(ringColor);
+            using var format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+            };
+            g.DrawString(glyph, font, brush, new RectangleF(0, 0, size, size), format);
+            return;
+        }
 
         var center = size / 2f;
         g.TranslateTransform(center, center);
@@ -386,6 +447,7 @@ public sealed class FloatButtonForm : Form
         {
             _spinTimer.Dispose();
             _longPressTimer.Dispose();
+            _flashTimer.Dispose();
             _tip.Dispose();
             _customImage?.Dispose();
         }

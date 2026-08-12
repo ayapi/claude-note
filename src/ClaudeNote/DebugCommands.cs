@@ -50,6 +50,8 @@ internal static class DebugCommands
                     return MultipartTest(config);
                 case "--takeover-test":
                     return TakeoverTest(config, args.Length > 1 ? args[1] : null);
+                case "--button-preview":
+                    return ButtonPreview(config);
                 default:
                     Console.WriteLine($"不明な引数: {args[0]}");
                     return 2;
@@ -248,6 +250,39 @@ internal static class DebugCommands
 
         Console.WriteLine($"---- 応答 ({sw.Elapsed.TotalSeconds:0}秒) ----");
         Console.WriteLine(result.Text);
+        return 0;
+    }
+
+    /// <summary>ボタンの各状態を画像に描き出して見た目を確認する。</summary>
+    private static int ButtonPreview(AppConfig config)
+    {
+        System.Windows.Forms.Application.EnableVisualStyles();
+        var size = Math.Max(config.FloatButtonSize, 32);
+        var outDir = Path.Combine(Path.GetTempPath(), "claudenote-button");
+        Directory.CreateDirectory(outDir);
+
+        var states = new (string Name, Action<FloatButtonForm> Setup)[]
+        {
+            ("1-通常", _ => { }),
+            ("2-処理中", b => b.SetBusy(true)),
+            ("3-成功", b => b.Flash(true, "ノートに挿入しました")),
+            ("4-警告", b => b.Flash(false, "何も選択されていません")),
+        };
+
+        foreach (var (name, setup) in states)
+        {
+            using var form = new FloatButtonForm(size, () => { });
+            form.Show();
+            setup(form);
+            System.Windows.Forms.Application.DoEvents();
+
+            using var bmp = new System.Drawing.Bitmap(form.ClientSize.Width, form.ClientSize.Height);
+            form.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height));
+            var path = Path.Combine(outDir, name + ".png");
+            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            Console.WriteLine($"{name}: {path}");
+            form.Hide();
+        }
         return 0;
     }
 

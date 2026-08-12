@@ -192,12 +192,14 @@ public sealed class TrayContext : ApplicationContext
         if (rec.Duration.TotalSeconds < 0.6)
         {
             _icon.ShowBalloonTip(2000, "ClaudeNote", "録音が短すぎます。ボタンを押したまま話してください。", ToolTipIcon.Warning);
+            _floatButton?.Flash(ok: false, "録音が短すぎます。押したまま話してください");
             TryDelete(rec.WavPath);
             return;
         }
         if (rec.PeakLevel < 0.02)
         {
             _icon.ShowBalloonTip(3000, "ClaudeNote", "音声が検出できませんでした。マイクの設定を確認してください。", ToolTipIcon.Warning);
+            _floatButton?.Flash(ok: false, "音声が検出できませんでした");
             TryDelete(rec.WavPath);
             return;
         }
@@ -289,6 +291,7 @@ public sealed class TrayContext : ApplicationContext
             var heard = result.VoiceText != null ? $"「{Shorten(result.VoiceText, 40)}」\n" : "";
             _icon.ShowBalloonTip(3000, "ClaudeNote",
                 $"{heard}ノートに挿入しました ({result.SessionMode}):\n{preview}", ToolTipIcon.Info);
+            _floatButton?.Flash(ok: true, $"ノートに挿入しました ({result.SessionMode})");
             Logger.Log($"挿入完了 ({result.SessionMode}, {result.Response.Length}文字) artifacts={result.ArtifactsDir}");
         }
         catch (OperationCanceledException)
@@ -296,16 +299,19 @@ public sealed class TrayContext : ApplicationContext
             // キャンセル時はノートへ挿入せず、セッション ID も更新しない
             // (中断した会話が次回の resume 対象になると文脈が壊れるため)
             _icon.ShowBalloonTip(2500, "ClaudeNote", "キャンセルしました。", ToolTipIcon.Info);
+            _floatButton?.Flash(ok: true, "キャンセルしました");
             Logger.Log("キャンセルしました");
         }
         catch (UserFacingException ex)
         {
             _icon.ShowBalloonTip(4000, "ClaudeNote", ex.Message, ToolTipIcon.Warning);
+            _floatButton?.Flash(ok: false, ex.Message, 5000);
             Logger.Log($"中断: {ex.Message}");
         }
         catch (Exception ex)
         {
             _icon.ShowBalloonTip(4000, "ClaudeNote", $"エラーが発生しました: {ex.Message}", ToolTipIcon.Error);
+            _floatButton?.Flash(ok: false, $"エラー: {ex.Message}", 5000);
             Logger.Log(ex);
         }
         finally
