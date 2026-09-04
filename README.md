@@ -61,6 +61,8 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `claudePath` | claude CLI のフルパス。`null` なら PATH から探す |
 | `timeoutSeconds` | Claude 応答のタイムアウト |
 | `responseColor` | 挿入テキストの色 (CSS hex)。既定は紺色 `#1F4E79` |
+| `responseWidthChars` | 応答テキストの横幅 (全角の文字数、既定 35)。0 以下で従来どおり選択範囲の幅に合わせる |
+| `responseCharWidthPt` | 全角 1 文字ぶんの幅 (pt、既定 11)。OneNote の本文フォントのサイズと同じ値にする |
 | `captureBackground` | 送信する画像の背景。`auto` (既定) はインクの明るさで白/暗色を選ぶ。`white` / `black` / `transparent` / `#RRGGBB` も可 |
 | `useClipboardCapture` | 選択インクをコピー経由で取得する (既定 true、下記)。false で従来の COM 経由 |
 | `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowSelection` は選択範囲の真下。x 座標はどちらも選択範囲の左端に揃う |
@@ -267,6 +269,19 @@ COM 経由 : 選択判定 1.3s + 取得 108.7s + 描画 0.2s        ≒ 110 秒
 - 画像を含む選択は COM 経由 (クリップボードからは ISF のみ取得)
 
 `useClipboardCapture: false` で従来どおり COM 経由にできる。
+
+## 回答の横幅
+
+応答テキストの横幅は既定で **全角 35 文字** (`responseWidthChars`) に固定する。
+以前は選択範囲の幅をそのまま使っていたため、選んだ範囲の大きさで 1 行の長さが
+変わって読みにくかった。
+
+幅は `responseWidthChars × responseCharWidthPt` (pt) で決まる。全角文字は
+1em = フォントサイズぶんの幅なので、`responseCharWidthPt` には OneNote の本文
+フォントのサイズを入れる (既定 11pt = 游ゴシック 11pt に対応)。
+
+実測 (385pt の場合): 35 文字は 1 行に収まり、36 文字で折り返す。
+`--width-test` で確認できる。
 
 ## 回答の挿入位置
 

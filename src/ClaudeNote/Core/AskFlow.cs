@@ -74,7 +74,7 @@ public sealed class AskFlow
         // 1 段階目: 文字起こしを吹き出しとして先に入れる
         var anchor = PageXml.ComputeInsertAnchor(pageXml, sel, cfg.InsertBelowAll);
         var bubble = cfg.VoicePrefix + voiceText;
-        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], cfg.VoiceColor, null));
+        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], cfg.VoiceColor, null, cfg.ResponseWidthPt));
         onProgress?.Invoke("文字起こしを挿入しました。回答を待っています…");
 
         // 2 段階目: Claude に問い合わせて回答を吹き出しの下に入れる
@@ -313,7 +313,7 @@ public sealed class AskFlow
             {
                 var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: true);
                 Logger.Log($"挿入位置: x={anchor.X:0.#} y={anchor.Bottom:0.#} ({part.GetType().Name})");
-                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [part], cfg.ResponseColor, map));
+                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [part], cfg.ResponseColor, map, cfg.ResponseWidthPt));
             }
             return;
         }
@@ -321,7 +321,7 @@ public sealed class AskFlow
         // 選択範囲の真下に置く場合は実測できないので、従来どおり見積もりで一括挿入する
         var fallback = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: false);
         Logger.Log($"挿入位置: x={fallback.X:0.#} y={fallback.Bottom:0.#} (belowSelection、一括)");
-        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, fallback, [.. flow], cfg.ResponseColor, map));
+        onenote.UpdatePage(PageXml.BuildResponseXml(pageId, fallback, [.. flow], cfg.ResponseColor, map, cfg.ResponseWidthPt));
     }
 
     private static Task<ClaudeResult> AskEngineAsync(AppConfig cfg, string prompt, string cwd, string? resumeId,

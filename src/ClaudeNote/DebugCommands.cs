@@ -48,6 +48,8 @@ internal static class DebugCommands
                     return SelectionTest(args[1]);
                 case "--multipart-test":
                     return MultipartTest(config);
+                case "--width-test":
+                    return WidthTest(config);
                 case "--takeover-test":
                     return TakeoverTest(config, args.Length > 1 ? args[1] : null);
                 case "--button-preview":
@@ -439,6 +441,68 @@ internal static class DebugCommands
         var pageInk = System.Xml.Linq.XDocument.Parse(lightXml).Descendants(PageXml.One + "InkDrawing").Count();
         Console.WriteLine($"ページ全体のインク数: {pageInk} / 選択されたインク: {sel.Ink.Count}");
         return 0;
+    }
+
+    /// <summary>
+    /// 応答テキストの横幅が設定どおりになるかをテストページで確認する。
+    /// 選択範囲の幅に引きずられて行長が変わっていた問題の検証用。
+    /// </summary>
+    private static int WidthTest(AppConfig config)
+    {
+        using var onenote = new OneNoteApp();
+        var (sectionId, sectionName) = FindRecentSection(onenote);
+        Console.WriteLine($"対象セクション: {sectionName}");
+        Console.WriteLine($"設定: {config.ResponseWidthChars}文字 × {config.ResponseCharWidthPt}pt = " +
+            $"{config.ResponseWidthPt:0.#}pt");
+
+        var pageId = onenote.CreateNewPage(sectionId);
+        Console.WriteLine($"テストページ作成: {pageId}");
+        try
+        {
+            // 33〜37文字の行をそれぞれ別の段落として入れ、高さから折り返しの有無を見る
+            var kana = string.Concat(Enumerable.Repeat("あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめも", 2));
+            var counts = new[] { 33, 34, 35, 36, 37 };
+            foreach (var n in counts)
+            {
+                var line = kana.Substring(0, n);
+                var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId),
+                    new Selection { BoundsPt = new System.Windows.Rect(72, 100, 700, 20) }, belowAll: true);
+                onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor,
+                    [new TextPart(line)], config.ResponseColor, null, config.ResponseWidthPt));
+                System.Threading.Thread.Sleep(400);
+            }
+
+            var doc = System.Xml.Linq.XDocument.Parse(onenote.GetPageXmlBasic(pageId));
+            var one = PageXml.One;
+            var outlines = doc.Root!.Elements(one + "Outline")
+                .Select(o => o.Element(one + "Size"))
+                .Where(sz => sz != null)
+                .Select(sz => (
+                    W: double.Parse((string)sz!.Attribute("width")!, System.Globalization.CultureInfo.InvariantCulture),
+                    H: double.Parse((string)sz!.Attribute("height")!, System.Globalization.CultureInfo.InvariantCulture)))
+                .ToList();
+
+            Console.WriteLine();
+            var expected = config.ResponseWidthPt ?? 0;
+            var widthOk = outlines.All(o => Math.Abs(o.W - expected) < 1.0);
+            for (var i = 0; i < outlines.Count && i < counts.Length; i++)
+            {
+                var wrapped = outlines[i].H > 26;   // 1行なら概ね 15〜20pt
+                Console.WriteLine($"  {counts[i]}文字: " +
+                    $"幅={outlines[i].W:0.#}pt 高さ={outlines[i].H:0.#}pt → {(wrapped ? "折り返した" : "1行に収まった")}");
+            }
+            Console.WriteLine();
+            Console.WriteLine(widthOk
+                ? $"OK: すべて設定どおりの {expected:0.#}pt 幅 (選択範囲の 700pt に引きずられていない)"
+                : "NG: 幅が設定どおりではありません");
+            var ok = widthOk;
+            return ok ? 0 : 1;
+        }
+        finally
+        {
+            onenote.DeleteHierarchyItem(pageId);
+            Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
+        }
     }
 
     /// <summary>ボタンの各状態を画像に描き出して見た目を確認する。</summary>

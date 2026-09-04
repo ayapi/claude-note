@@ -224,13 +224,17 @@ public static class PageXml
     /// <param name="captureMap">
     /// キャプチャ画像のピクセル座標 → ページ座標 (pt) の変換。インク指定に使う。null ならインクは無視。
     /// </param>
+    /// <param name="widthPt">
+    /// テキストの横幅 (pt)。null なら選択範囲の幅に合わせる。
+    /// 選択の大きさで行長が変わると読みにくいので、通常は設定から一定幅を渡す。
+    /// </param>
     public static string BuildResponseXml(string pageId, Rect anchorPt, IReadOnlyList<ResponsePart> parts,
-        string colorHex, CaptureMap? captureMap)
+        string colorHex, CaptureMap? captureMap, double? widthPt = null)
     {
         var inv = CultureInfo.InvariantCulture;
         var x = Math.Max(anchorPt.X, 0);
         var cursorY = anchorPt.Bottom + 12;
-        var width = Math.Max(anchorPt.Width, 240);
+        var width = widthPt is double w && w > 0 ? w : Math.Max(anchorPt.Width, 240);
 
         var pageEl = new XElement(One + "Page",
             new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName),

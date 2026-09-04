@@ -62,6 +62,25 @@ public sealed class AppConfig
     public string ResponseColor { get; set; } = "#1F4E79";
 
     /// <summary>
+    /// 応答テキストの横幅 (全角の文字数)。0 以下にすると選択範囲の幅に合わせる
+    /// (従来の挙動。選択の大きさで行長が変わって読みにくい)。
+    /// </summary>
+    [JsonPropertyName("responseWidthChars")]
+    public int ResponseWidthChars { get; set; } = 35;
+
+    /// <summary>
+    /// 全角 1 文字ぶんの幅 (pt)。OneNote の本文フォントのサイズと同じ値にする
+    /// (全角文字は 1em = フォントサイズぶんの幅を持つため)。既定の 11pt は
+    /// OneNote の標準 (游ゴシック 11pt) に合わせたもの。
+    /// </summary>
+    [JsonPropertyName("responseCharWidthPt")]
+    public double ResponseCharWidthPt { get; set; } = 11.0;
+
+    /// <summary>応答テキストの横幅 (pt)。幅を指定しない設定なら null。</summary>
+    public double? ResponseWidthPt =>
+        ResponseWidthChars > 0 ? ResponseWidthChars * ResponseCharWidthPt : null;
+
+    /// <summary>
     /// 選択範囲のインクを「OneNote にコピーさせてクリップボードから受け取る」方式で取るか。
     /// COM から取ると選択が何本でもページ全体をシリアライズするため、手書きの多い
     /// ページでは 100 秒を超える (実測 6500本で 108 秒 → コピー経由なら 3 秒)。
@@ -316,6 +335,8 @@ public sealed class AppConfig
             ClaudePath = ClaudePath,
             TimeoutSeconds = TimeoutSeconds,
             ResponseColor = ResponseColor,
+            ResponseWidthChars = ResponseWidthChars,
+            ResponseCharWidthPt = ResponseCharWidthPt,
             CaptureBackground = CaptureBackground,
             UseClipboardCapture = UseClipboardCapture,
             ClipboardTimeoutMs = ClipboardTimeoutMs,
