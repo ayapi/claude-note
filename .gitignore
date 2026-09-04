@@ -11,3 +11,7 @@ docs/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# 設定編集時のバックアップ
+*.bak
+*.bak2
