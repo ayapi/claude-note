@@ -204,12 +204,16 @@ public sealed class AppConfig
         "ルール:",
         "- ink の座標は送られた画像のピクセル座標系。ink-overlay は画像上で見えている位置にそのまま重なる",
         "- 画像が送られていない（テキストだけを受け取った）ときは、ink の座標はポイント単位として扱われる。200 くらいで手のひらサイズ。ink-overlay は重ねる先が無いので使えない",
+        "- ノートのページ背景は現在「{noteTheme}」。線画は画像より ink を優先すること。ink は OneNote が背景に合わせて自動で反転するので、白いノートでも黒いノートでも読める",
+        "- どうしても画像が必要なとき (円・正確な角度・フォントを使うラベルなど) は、背景を必ず透明 (RGBA) にする。白で塗りつぶすと暗いノートの上で白い板のように浮く",
+        "- 透明背景の画像は OneNote に反転されないので、線や文字の色はこの背景でそのまま読める色にする。真っ黒や真っ白は避け、中間の色 (青・橙・緑など) を使うと両方の背景で読める",
         "- ink の連続する行はまとめて1つの図になる。線分図・面積図・矢印はこれで描く",
         "- 正確な作図 (角度・長さ・円) が要るときは、自分で計算して PNG を作り {{image:}} で貼る",
         "- 図は説明の補助。まず言葉で1個教えて、必要なときだけ描く",
     ];
 
-    public string FigureGuideText => string.Join("\n", FigureGuide);
+    public string FigureGuideText => string.Join("\n", FigureGuide)
+        .Replace("{noteTheme}", IsDarkNote ? "暗い背景 (ダークモード)" : "白い背景");
 
     // ---- 音声入力 ----
 
@@ -271,6 +275,22 @@ public sealed class AppConfig
     ];
 
     public string VoicePromptTemplateText => string.Join("\n", VoicePromptTemplate);
+
+    /// <summary>
+    /// ノートのページ背景。"auto" (既定) は OneNote の「表示 → 背景色の切り替え」の
+    /// 状態から判定する。"dark" / "light" で固定もできる。
+    /// Claude が図を作るときの色選びに使う。
+    /// </summary>
+    [JsonPropertyName("noteTheme")]
+    public string NoteTheme { get; set; } = "auto";
+
+    /// <summary>ページ背景が暗いか。</summary>
+    public bool IsDarkNote => NoteTheme.Trim().ToLowerInvariant() switch
+    {
+        "dark" => true,
+        "light" => false,
+        _ => NoteThemeDetector.IsDarkCanvas(),
+    };
 
     /// <summary>画面右下のフローティングボタンを表示するか。</summary>
     [JsonPropertyName("floatButton")]
@@ -348,6 +368,7 @@ public sealed class AppConfig
             NodePath = NodePath,
             SidecarDir = SidecarDir,
             FigureGuide = FigureGuide,
+            NoteTheme = NoteTheme,
             SessionTakeover = SessionTakeover,
             SessionTakeoverPromptTemplate = SessionTakeoverPromptTemplate,
             FloatButton = FloatButton,

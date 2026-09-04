@@ -50,6 +50,8 @@ internal static class DebugCommands
                     return MultipartTest(config);
                 case "--width-test":
                     return WidthTest(config);
+                case "--theme-test":
+                    return ThemeTest(config);
                 case "--takeover-test":
                     return TakeoverTest(config, args.Length > 1 ? args[1] : null);
                 case "--button-preview":
@@ -503,6 +505,24 @@ internal static class DebugCommands
             onenote.DeleteHierarchyItem(pageId);
             Console.WriteLine("テストページを削除しました (ノートブックのごみ箱に移動)");
         }
+    }
+
+    /// <summary>
+    /// ノートの背景色の判定結果を表示する。
+    /// OneNote の「表示 → 背景色の切り替え」を切り替えて実行し直すと、値が追従するか確かめられる。
+    /// </summary>
+    private static int ThemeTest(AppConfig config)
+    {
+        Console.WriteLine($"設定 noteTheme: {config.NoteTheme}");
+        Console.WriteLine($"判定: {(config.IsDarkNote ? "暗い背景 (ダークモード)" : "白い背景")}");
+        Console.WriteLine($"自動判定の生の結果: {(NoteThemeDetector.IsDarkCanvas() ? "暗い" : "白い")}");
+        Console.WriteLine();
+        Console.WriteLine("--- Claude に渡している図の指針 (背景に関する行) ---");
+        foreach (var line in config.FigureGuideText.Split('\n'))
+        {
+            if (line.Contains("背景") || line.Contains("ink を優先")) Console.WriteLine("  " + line);
+        }
+        return 0;
     }
 
     /// <summary>ボタンの各状態を画像に描き出して見た目を確認する。</summary>
