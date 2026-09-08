@@ -233,7 +233,10 @@ public sealed class AppConfig
     [JsonPropertyName("audioDevice")]
     public int? AudioDevice { get; set; }
 
-    /// <summary>文字起こしエンジン: "auto" / "whisper" / "windows"。</summary>
+    /// <summary>
+    /// 文字起こしエンジン: "auto" / "whisper" / "openai" / "windows"。
+    /// auto は使えるものを whisper → openai → windows の順に選ぶ。
+    /// </summary>
     [JsonPropertyName("sttEngine")]
     public string SttEngine { get; set; } = "auto";
 
@@ -248,6 +251,25 @@ public sealed class AppConfig
     /// <summary>whisper のモデル (ggml-*.bin) のパス。</summary>
     [JsonPropertyName("whisperModel")]
     public string? WhisperModel { get; set; }
+
+    /// <summary>
+    /// OpenAI の文字起こし API を使うためのキー。null なら環境変数 OPENAI_API_KEY を見る。
+    /// whisper をローカルに置けない PC 用のフォールバック。
+    /// </summary>
+    [JsonPropertyName("openaiApiKey")]
+    public string? OpenAiApiKey { get; set; }
+
+    /// <summary>OpenAI の文字起こしモデル。アカウントが未対応なら "whisper-1" にする。</summary>
+    [JsonPropertyName("openaiSttModel")]
+    public string OpenAiSttModel { get; set; } = "gpt-4o-mini-transcribe";
+
+    /// <summary>設定または環境変数から OpenAI のキーを取り出す。無ければ null。</summary>
+    public string? ResolveOpenAiApiKey()
+    {
+        if (!string.IsNullOrWhiteSpace(OpenAiApiKey)) return OpenAiApiKey.Trim();
+        var env = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        return string.IsNullOrWhiteSpace(env) ? null : env.Trim();
+    }
 
     /// <summary>文字起こしテキストの行頭に付ける記号。</summary>
     [JsonPropertyName("voicePrefix")]
@@ -381,6 +403,8 @@ public sealed class AppConfig
             SttLanguage = SttLanguage,
             WhisperExe = WhisperExe,
             WhisperModel = WhisperModel,
+            OpenAiApiKey = OpenAiApiKey,
+            OpenAiSttModel = OpenAiSttModel,
             VoicePrefix = VoicePrefix,
             VoiceColor = VoiceColor,
             VoiceIncludesSelection = VoiceIncludesSelection,

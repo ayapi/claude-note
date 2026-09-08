@@ -46,6 +46,8 @@ public sealed class TrayContext : ApplicationContext
             _icon.ShowBalloonTip(2000, "ClaudeNote", "会話セッションの対応をリセットしました。次回は新規会話から始まります。", ToolTipIcon.Info);
         });
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("更新を確認して適用", null, (_, _) => CheckForUpdate());
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("終了", null, (_, _) => ExitApp());
         _icon.ContextMenuStrip = menu;
 
@@ -364,6 +366,71 @@ public sealed class TrayContext : ApplicationContext
                 "編集後は「終了」して起動し直すと反映されます。", ToolTipIcon.Info);
         }
         catch (Exception ex) { Logger.Log(ex); }
+    }
+
+    /// <summary>
+    /// リモートに更新があるか調べ、あれば内容を見せてから取り込み・ビルド・再起動を行う。
+    /// 実際の作業はアプリ終了後に外部スクリプトが引き継ぐ (実行中は exe を上書きできないため)。
+    /// </summary>
+    private async void CheckForUpdate()
+    {
+        if (_busy)
+        {
+            _icon.ShowBalloonTip(3000, "ClaudeNote", "処理中です。終わってから試してください。", ToolTipIcon.Warning);
+            return;
+        }
+
+        _icon.ShowBalloonTip(2000, "ClaudeNote", "更新を確認しています…", ToolTipIcon.Info);
+        Updater.UpdateStatus status;
+        try
+        {
+            status = await Task.Run(Updater.Check);
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"更新の確認に失敗: {ex.Message}");
+            MessageBox.Show($"更新の確認に失敗しました。\n\n{ex.Message}", "ClaudeNote の更新",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        if (status.Blocker != null)
+        {
+            Logger.Log($"更新できません: {status.Blocker}");
+            MessageBox.Show(status.Blocker, "ClaudeNote の更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        if (status.Behind == 0)
+        {
+            Logger.Log("更新の確認: すでに最新です");
+            _icon.ShowBalloonTip(2000, "ClaudeNote", "すでに最新です。", ToolTipIcon.Info);
+            return;
+        }
+
+        const int show = 15;
+        var list = string.Join("\n", status.Commits.Take(show).Select(c => "・" + c));
+        if (status.Commits.Length > show) list += $"\n… ほか {status.Commits.Length - show} 件";
+
+        Logger.Log($"更新の確認: {status.Behind} 件の更新があります");
+        var answer = MessageBox.Show(
+            $"{status.Behind} 件の更新があります。\n\n{list}\n\n" +
+            "取り込んでビルドし、ClaudeNote を再起動します。よろしいですか？\n" +
+            "(作業中はコンソールが表示されます)",
+            "ClaudeNote の更新", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+        if (answer != DialogResult.OK) return;
+
+        try
+        {
+            Updater.ApplyAndRestart(status.RepoRoot!);
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"更新スクリプトの起動に失敗: {ex.Message}");
+            MessageBox.Show($"更新を開始できませんでした。\n\n{ex.Message}", "ClaudeNote の更新",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        ExitApp();
     }
 
     private void ExitApp()

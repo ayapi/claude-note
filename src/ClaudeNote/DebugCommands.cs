@@ -25,6 +25,8 @@ internal static class DebugCommands
             {
                 case "--render-test":
                     return RenderTest(args[1], args[2]);
+                case "--update-check":
+                    return UpdateCheck();
                 case "--capture-test":
                     return CaptureTest();
                 case "--ask-test":
@@ -72,6 +74,21 @@ internal static class DebugCommands
             Console.WriteLine($"FAILED: {ex}");
             return 1;
         }
+    }
+
+    /// <summary>更新の確認だけを行う (取り込みもビルドもしない)。配布先での切り分け用。</summary>
+    private static int UpdateCheck()
+    {
+        Console.WriteLine($"リポジトリの根: {Updater.FindRepoRoot() ?? "(見つからない)"}");
+        var s = Updater.Check();
+        if (s.Blocker != null)
+        {
+            Console.WriteLine($"更新できません: {s.Blocker}");
+            return 1;
+        }
+        Console.WriteLine(s.Behind == 0 ? "すでに最新です。" : $"{s.Behind} 件の更新があります:");
+        foreach (var c in s.Commits) Console.WriteLine("  " + c);
+        return 0;
     }
 
     private static int RenderTest(string xmlPath, string outPng)

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -8,29 +10,55 @@ namespace ClaudeNote;
 
 /// <summary>
 /// WAV を文字起こしする。エンジンは設定で選べる:
-///   whisper … whisper.cpp (高精度。モデルの配置が必要)
+///   whisper … whisper.cpp (高精度。ローカルで動くが exe とモデルの配置が必要)
+///   openai  … OpenAI の文字起こし API (高精度。キーと通信が必要で従量課金)
 ///   windows … System.Speech (Windows 標準。追加インストール不要だが精度は劣る)
-///   auto    … whisper が使えれば whisper、無ければ windows
+///   auto    … 使えるものを whisper → openai → windows の順に選ぶ
+///
+/// auto のときは、選んだエンジンが失敗しても次の候補で試す。
+/// whisper を置けない PC でも、キーがあれば実用的な精度で動かせるようにするため。
 /// </summary>
 public static class Transcriber
 {
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
+
     public static async Task<string> TranscribeAsync(AppConfig config, string wavPath, CancellationToken ct = default)
     {
-        var engine = config.SttEngine.ToLowerInvariant();
-        if (engine == "auto")
-            engine = ResolveWhisperExe(config) != null ? "whisper" : "windows";
+        var requested = config.SttEngine.ToLowerInvariant();
+        var chain = requested == "auto" ? AutoChain(config) : new[] { requested };
 
-        Logger.Log($"文字起こし開始 (engine={engine}): {wavPath}");
-        var text = engine switch
+        for (var i = 0; i < chain.Length; i++)
         {
-            "whisper" => await WhisperAsync(config, wavPath, ct),
-            "windows" => await Task.Run(() => WindowsSpeech(config, wavPath), ct),
-            _ => throw new UserFacingException($"未知の sttEngine です: {config.SttEngine}"),
-        };
+            var engine = chain[i];
+            Logger.Log($"文字起こし開始 (engine={engine}): {wavPath}");
+            try
+            {
+                var text = Clean(engine switch
+                {
+                    "whisper" => await WhisperAsync(config, wavPath, ct),
+                    "openai" => await OpenAiAsync(config, wavPath, ct),
+                    "windows" => await Task.Run(() => WindowsSpeech(config, wavPath), ct),
+                    _ => throw new UserFacingException($"未知の sttEngine です: {config.SttEngine}"),
+                });
+                Logger.Log($"文字起こし結果 ({text.Length}文字): {Truncate(text, 100)}");
+                return text;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && i < chain.Length - 1)
+            {
+                Logger.Log($"{engine} での文字起こしに失敗しました。{chain[i + 1]} で試し直します: {ex.Message}");
+            }
+        }
+        throw new UserFacingException("文字起こしのエンジンがひとつも使えませんでした。");
+    }
 
-        text = Clean(text);
-        Logger.Log($"文字起こし結果 ({text.Length}文字): {Truncate(text, 100)}");
-        return text;
+    /// <summary>auto のときに試す順番。使える見込みのあるものだけを並べる。</summary>
+    private static string[] AutoChain(AppConfig config)
+    {
+        var chain = new List<string>();
+        if (ResolveWhisperExe(config) != null && ResolveWhisperModel(config) != null) chain.Add("whisper");
+        if (config.ResolveOpenAiApiKey() != null) chain.Add("openai");
+        chain.Add("windows"); // 追加インストール不要なので最後の砦として必ず入れる
+        return chain.ToArray();
     }
 
     // ---- whisper.cpp ----
@@ -39,10 +67,9 @@ public static class Transcriber
     {
         var exe = ResolveWhisperExe(config)
             ?? throw new UserFacingException(
-                "whisper が見つかりません。appsettings.json の whisperExe / whisperModel を設定するか、sttEngine を \"windows\" にしてください。");
-        var model = config.WhisperModel;
-        if (string.IsNullOrWhiteSpace(model) || !File.Exists(Environment.ExpandEnvironmentVariables(model)))
-            throw new UserFacingException($"whisper のモデルが見つかりません: {model}");
+                "whisper が見つかりません。appsettings.json の whisperExe / whisperModel を設定するか、sttEngine を \"openai\" か \"windows\" にしてください。");
+        var model = ResolveWhisperModel(config)
+            ?? throw new UserFacingException($"whisper のモデルが見つかりません: {config.WhisperModel}");
 
         var psi = new ProcessStartInfo
         {
@@ -56,7 +83,7 @@ public static class Transcriber
         };
         foreach (var a in new[]
         {
-            "-m", Environment.ExpandEnvironmentVariables(model),
+            "-m", model,
             "-f", wavPath,
             "-l", config.SttLanguage,
             "--no-prints", "--no-timestamps",
@@ -86,14 +113,51 @@ public static class Transcriber
         return stdout;
     }
 
-    private static string? ResolveWhisperExe(AppConfig config)
+    private static string? ResolveWhisperExe(AppConfig config) => ResolveExisting(config.WhisperExe);
+
+    private static string? ResolveWhisperModel(AppConfig config) => ResolveExisting(config.WhisperModel);
+
+    private static string? ResolveExisting(string? path)
     {
-        if (!string.IsNullOrWhiteSpace(config.WhisperExe))
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var p = Environment.ExpandEnvironmentVariables(path);
+        return File.Exists(p) ? p : null;
+    }
+
+    // ---- OpenAI の文字起こし API ----
+
+    private static async Task<string> OpenAiAsync(AppConfig config, string wavPath, CancellationToken ct)
+    {
+        var key = config.ResolveOpenAiApiKey()
+            ?? throw new UserFacingException(
+                "OpenAI のキーがありません。appsettings.json の openaiApiKey か、環境変数 OPENAI_API_KEY を設定してください。");
+
+        using var form = new MultipartFormDataContent();
+        await using var wav = File.OpenRead(wavPath);
+        var file = new StreamContent(wav);
+        file.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        form.Add(file, "file", Path.GetFileName(wavPath));
+        form.Add(new StringContent(config.OpenAiSttModel), "model");
+        if (!string.IsNullOrWhiteSpace(config.SttLanguage))
+            form.Add(new StringContent(config.SttLanguage), "language");
+        form.Add(new StringContent("text"), "response_format");
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/audio/transcriptions")
         {
-            var p = Environment.ExpandEnvironmentVariables(config.WhisperExe);
-            return File.Exists(p) ? p : null;
+            Content = form,
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+
+        using var res = await Http.SendAsync(req, ct);
+        var body = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            // 本文にキーは含まれないが、念のため長さを切って記録する
+            Logger.Log($"OpenAI 文字起こし {(int)res.StatusCode}: {Truncate(body, 300)}");
+            throw new UserFacingException(
+                $"OpenAI の文字起こしに失敗しました ({(int)res.StatusCode})。モデル {config.OpenAiSttModel} が使えない場合は openaiSttModel を \"whisper-1\" にしてください。");
         }
-        return null;
+        return body;
     }
 
     // ---- Windows 標準 (System.Speech) ----
