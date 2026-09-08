@@ -27,6 +27,8 @@ internal static class DebugCommands
                     return RenderTest(args[1], args[2]);
                 case "--update-check":
                     return UpdateCheck();
+                case "--update-apply":
+                    return UpdateApply();
                 case "--capture-test":
                     return CaptureTest();
                 case "--ask-test":
@@ -88,6 +90,25 @@ internal static class DebugCommands
         }
         Console.WriteLine(s.Behind == 0 ? "すでに最新です。" : $"{s.Behind} 件の更新があります:");
         foreach (var c in s.Commits) Console.WriteLine("  " + c);
+        return 0;
+    }
+
+    /// <summary>更新を実際に取り込む。トレイメニューに触れない環境での切り分け用。</summary>
+    private static int UpdateApply()
+    {
+        var s = Updater.Check();
+        if (s.Blocker != null)
+        {
+            Console.WriteLine($"更新できません: {s.Blocker}");
+            return 1;
+        }
+        if (s.Behind == 0)
+        {
+            Console.WriteLine("すでに最新です。");
+            return 0;
+        }
+        Console.WriteLine($"{s.Behind} 件の更新を取り込みます。ビルド後に ClaudeNote が起動します。");
+        Updater.ApplyAndRestart(s.RepoRoot!);
         return 0;
     }
 

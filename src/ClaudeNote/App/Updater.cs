@@ -106,6 +106,12 @@ public static class Updater
         # ClaudeNote が自分自身を更新するためのスクリプト。アプリ側から起動される。
         # 実行中は exe がロックされてビルドできないので、まず終了を待つ。
         $ErrorActionPreference = "Continue"
+        # 日本語版の dotnet / npm の出力をログで読めるようにする (既定のコードページだと化ける)
+        try {
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+          $env:DOTNET_CLI_UI_LANGUAGE = "en"
+        } catch { }
         function Log($m) {
           $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m
           Write-Host $line
@@ -125,15 +131,25 @@ public static class Updater
           Start-Sleep -Seconds 2
         }
 
+        # 途中で失敗したときに取り込みごと巻き戻すため、更新前の位置を控える。
+        # ソースだけ進んでバイナリが古いまま残ると、次の確認で「最新です」と出て
+        # 古い exe を使い続けることになるため、ソースとバイナリは必ず一緒に進める。
+        $script:PrevSha = (& git -C $Repo rev-parse HEAD 2>$null | Out-String).Trim()
+        Log "更新前の位置: $script:PrevSha"
+
         function Fail($m) {
           Log "失敗: $m"
+          if ($script:PrevSha) {
+            Log "取り込みを $script:PrevSha に巻き戻します"
+            & git -C $Repo reset --hard $script:PrevSha 2>&1 | Out-Null
+          }
           Write-Host ""
           Write-Host "更新に失敗しました: $m" -ForegroundColor Red
+          Write-Host "更新前の状態に戻したので、ClaudeNote はこれまでどおり使えます。" -ForegroundColor Yellow
           Write-Host "ログ: $LogPath"
           Write-Host ""
-          # 元の exe は残っているので、そのまま起こして元の状態に戻す
           if (Test-Path $Exe) {
-            Write-Host "更新前の ClaudeNote を起動して戻します。"
+            Write-Host "更新前の ClaudeNote を起動します。"
             Start-Process -FilePath $Exe
           }
           Read-Host "Enter キーで閉じます"
