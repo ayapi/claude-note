@@ -39,6 +39,10 @@ public sealed class ConfigProfile
     [JsonPropertyName("voicePromptTemplate")]
     public string[]? VoicePromptTemplate { get; set; }
 
+    /// <summary>会話の区切り方 (section / page / off)。用途ごとに変えたいので上書きできる。</summary>
+    [JsonPropertyName("sessionScope")]
+    public string? SessionScope { get; set; }
+
     [JsonPropertyName("handoffSummaryPrompt")]
     public string[]? HandoffSummaryPrompt { get; set; }
 
@@ -425,7 +429,7 @@ public sealed class AppConfig
             ClipboardTimeoutMs = ClipboardTimeoutMs,
             InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
-            SessionScope = SessionScope,
+            SessionScope = profile.SessionScope ?? SessionScope,
             WorkspaceDir = profile.WorkspaceDir ?? WorkspaceDir,
             Engine = Engine,
             NodePath = NodePath,
