@@ -38,6 +38,12 @@ public sealed class ConfigProfile
 
     [JsonPropertyName("voicePromptTemplate")]
     public string[]? VoicePromptTemplate { get; set; }
+
+    [JsonPropertyName("handoffSummaryPrompt")]
+    public string[]? HandoffSummaryPrompt { get; set; }
+
+    [JsonPropertyName("handoffPromptTemplate")]
+    public string[]? HandoffPromptTemplate { get; set; }
 }
 
 public sealed class AppConfig
@@ -244,6 +250,41 @@ public sealed class AppConfig
     [JsonPropertyName("sttLanguage")]
     public string SttLanguage { get; set; } = "ja";
 
+    /// <summary>
+    /// sessionScope が "page" のとき、新しいページで会話を作り直す際に、
+    /// 前のページのセッションに申し送りを書かせて引き継ぐか。
+    /// 会話が際限なく伸びるのを防ぎつつ、話の流れは保つための仕組み。
+    /// </summary>
+    [JsonPropertyName("sessionHandoff")]
+    public bool SessionHandoff { get; set; } = true;
+
+    /// <summary>前のページのセッションに投げる、申し送りを書かせるためのプロンプト。</summary>
+    [JsonPropertyName("handoffSummaryPrompt")]
+    public string[] HandoffSummaryPrompt { get; set; } =
+    [
+        "この会話をここで区切ります。次の会話に引き継ぐための申し送りを書いてください。",
+        "- 相手が何に取り組み、どこまで進んだか",
+        "- つまずいた点と、その原因として見立てたこと",
+        "- 次に何をするつもりだったか",
+        "事実だけを 400 字以内のプレーンテキストで。前置き・感想・見出しは書かない。",
+    ];
+
+    public string HandoffSummaryPromptText => string.Join("\n", HandoffSummaryPrompt);
+
+    /// <summary>新しいセッションの最初のプロンプトに添える申し送り。{summary} が中身に置き換わる。</summary>
+    [JsonPropertyName("handoffPromptTemplate")]
+    public string[] HandoffPromptTemplate { get; set; } =
+    [
+        "前の会話からの申し送りです (あなたはその会話自体は覚えていません):",
+        "---",
+        "{summary}",
+        "---",
+        "これを踏まえたうえで、以下に答えてください。",
+        "",
+    ];
+
+    public string HandoffPromptText => string.Join("\n", HandoffPromptTemplate);
+
     /// <summary>whisper-cli.exe のパス。null なら whisper は使わない。</summary>
     [JsonPropertyName("whisperExe")]
     public string? WhisperExe { get; set; }
@@ -401,6 +442,9 @@ public sealed class AppConfig
             AudioDevice = AudioDevice,
             SttEngine = SttEngine,
             SttLanguage = SttLanguage,
+            SessionHandoff = SessionHandoff,
+            HandoffSummaryPrompt = profile.HandoffSummaryPrompt ?? HandoffSummaryPrompt,
+            HandoffPromptTemplate = profile.HandoffPromptTemplate ?? HandoffPromptTemplate,
             WhisperExe = WhisperExe,
             WhisperModel = WhisperModel,
             OpenAiApiKey = OpenAiApiKey,

@@ -25,6 +25,8 @@ internal static class DebugCommands
             {
                 case "--render-test":
                     return RenderTest(args[1], args[2]);
+                case "--handoff-test":
+                    return HandoffTest(config).GetAwaiter().GetResult();
                 case "--update-check":
                     return UpdateCheck();
                 case "--update-apply":
@@ -91,6 +93,61 @@ internal static class DebugCommands
         Console.WriteLine(s.Behind == 0 ? "すでに最新です。" : $"{s.Behind} 件の更新があります:");
         foreach (var c in s.Commits) Console.WriteLine("  " + c);
         return 0;
+    }
+
+    /// <summary>
+    /// ページをまたいだ申し送りの引き継ぎを、OneNote 抜きで通しで確かめる。
+    /// 1) 前のページのつもりで会話を作り、事実を覚えさせる
+    /// 2) 新しいページのつもりで申し送りを書かせる
+    /// 3) その申し送りだけを持った新しい会話が、事実を答えられるかを見る
+    /// </summary>
+    private static async Task<int> HandoffTest(AppConfig config)
+    {
+        const string LINEAGE = "HANDOFF-TEST|lineage";
+        var cwd = Path.GetTempPath();
+        var cfg = config;
+        var store = new SessionStore();
+        var ok = true;
+        void Check(string label, bool cond, string extra = "")
+        {
+            Console.WriteLine($"  {(cond ? "PASS" : "FAIL")}  {label}{(extra.Length > 0 ? "  " + extra : "")}");
+            if (!cond) ok = false;
+        }
+
+        Console.WriteLine("1) 前のページの会話をつくる");
+        var seed = await ClaudeSidecar.Instance.AskAsync(cfg,
+            "これは学習セッションです。今日は「点の移動」をやっていて、相手は三角形の面積までは解けたが、"
+            + "グラフの折れ曲がる点でつまずいている。次はグラフのかど探しをやる予定。"
+            + "把握した、とだけ答えて。", cwd, null, [], null, CancellationToken.None);
+        Check("会話ができた", !string.IsNullOrWhiteSpace(seed.SessionId), $"session={seed.SessionId?[..8]}");
+        if (seed.SessionId == null) return 1;
+        store.Update(LINEAGE, seed.SessionId);
+
+        Console.WriteLine("2) 新しいページとして申し送りを作らせる");
+        var handoff = await AskFlow.PrepareHandoffAsync(cfg, store, LINEAGE, startingFresh: true,
+            cwd, [], CancellationToken.None);
+        Check("申し送りが返る", !string.IsNullOrWhiteSpace(handoff));
+        var saved = store.Get(LINEAGE);
+        Check("申し送りが保存される", !string.IsNullOrWhiteSpace(saved?.Summary));
+        Check("つまずきが引き継がれている", handoff?.Contains("グラフ") == true);
+        Console.WriteLine("  --- 申し送り本文 ---");
+        Console.WriteLine("  " + (saved?.Summary ?? "(なし)").Replace("\n", "\n  "));
+
+        Console.WriteLine("3) 申し送りだけを持った新しい会話に聞く");
+        var asked = await ClaudeSidecar.Instance.AskAsync(cfg,
+            handoff + "\n相手は今日どこでつまずいていましたか。一文で答えて。",
+            cwd, null, [], null, CancellationToken.None);
+        Console.WriteLine("  -> " + asked.Text.Trim().Replace("\n", " "));
+        Check("新しい会話が前の内容を答えられる", asked.Text.Contains("グラフ"));
+        Check("前の会話とは別のセッションになっている", asked.SessionId != seed.SessionId);
+
+        Console.WriteLine("4) 同じページの 2 回目では申し送りを作らない");
+        var again = await AskFlow.PrepareHandoffAsync(cfg, store, LINEAGE, startingFresh: false,
+            cwd, [], CancellationToken.None);
+        Check("会話継続中は申し送りを作らない", again == null);
+
+        Console.WriteLine(ok ? "\n結果: すべて PASS" : "\n結果: FAIL あり");
+        return ok ? 0 : 1;
     }
 
     /// <summary>更新を実際に取り込む。トレイメニューに触れない環境での切り分け用。</summary>

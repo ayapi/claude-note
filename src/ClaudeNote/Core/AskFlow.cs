@@ -79,7 +79,7 @@ public sealed class AskFlow
 
         // 2 段階目: Claude に問い合わせて回答を吹き出しの下に入れる
         // (挿入位置は InsertParts が実測するので、ここで先に決めておく必要はない)
-        var (scopeKey, store, entry) = ResolveSession(cfg, pageId, sectionId);
+        var (scopeKey, lineageKey, store, entry) = ResolveSession(cfg, pageId, sectionId);
         var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
         var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
 
@@ -101,12 +101,13 @@ public sealed class AskFlow
             .Replace("{figureGuide}", cfg.FigureGuideText);
 
         var addDirs = cfg.ExpandedAddDirs;
+        var handoff = await PrepareHandoffAsync(cfg, store, lineageKey, resumeId == null, runCwd, addDirs, ct);
         // 音声入力のプロンプトは継続用と初回用を分けていないので、そのまま使う
-        var outcome = await AskWithContinuityAsync(cfg, _ => prompt, runCwd, resumeId, addDirs, onProgress, ct);
+        var outcome = await AskWithContinuityAsync(cfg, _ => Prepend(handoff, prompt),
+            runCwd, resumeId, addDirs, onProgress, ct);
         var result = outcome.Result;
 
-        if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
-            store!.Update(scopeKey, result.SessionId!);
+        SaveSession(store, scopeKey, lineageKey, result.SessionId);
 
         var parts = ResponseParser.Parse(result.Text);
         InsertParts(onenote, pageId, sel, cfg, parts, render?.Map);
@@ -187,17 +188,94 @@ public sealed class AskFlow
         return cfg;
     }
 
-    private static (string? ScopeKey, SessionStore? Store, SessionEntry? Entry) ResolveSession(
+    /// <summary>
+    /// この実行で使う会話セッションを決める。
+    /// LineageKey は、ページ単位で会話を切っているときに「同じセクションの直前のセッション」を
+    /// 辿るための鍵。ページが変わっても話の流れを引き継ぐために使う。
+    /// </summary>
+    private static (string? ScopeKey, string? LineageKey, SessionStore? Store, SessionEntry? Entry) ResolveSession(
         AppConfig cfg, string pageId, string sectionId)
     {
-        var scopeKey = cfg.SessionScope.ToLowerInvariant() switch
+        var scope = cfg.SessionScope.ToLowerInvariant();
+        var scopeKey = scope switch
         {
             "off" => null,
             "page" => pageId,
             _ => !string.IsNullOrEmpty(sectionId) ? sectionId : pageId,
         };
+        // セクション単位のときは会話がそもそも続くので、引き継ぎは要らない
+        var lineageKey = scope == "page" && !string.IsNullOrEmpty(sectionId) ? sectionId + "|lineage" : null;
         var store = scopeKey != null ? new SessionStore() : null;
-        return (scopeKey, store, scopeKey != null ? store!.Get(scopeKey) : null);
+        return (scopeKey, lineageKey, store, scopeKey != null ? store!.Get(scopeKey) : null);
+    }
+
+    /// <summary>
+    /// 新しいページで会話を作り直すとき、前のページのセッションに申し送りを書かせて持ってくる。
+    /// 会話を短く保ったまま流れを切らさないための仕組みで、ページ 1 枚につき 1 回だけ走る。
+    /// 失敗しても本題は止めない (前回の申し送りが残っていればそれを使う)。
+    /// </summary>
+    internal static async Task<string?> PrepareHandoffAsync(AppConfig cfg, SessionStore? store, string? lineageKey,
+        bool startingFresh, string cwd, string[] addDirs, CancellationToken ct)
+    {
+        if (!cfg.SessionHandoff || store == null || lineageKey == null || !startingFresh) return null;
+
+        var lineage = store.Get(lineageKey);
+        if (lineage == null || string.IsNullOrWhiteSpace(lineage.SessionId))
+        {
+            // セクション単位からページ単位へ切り替えた直後は系統の記録がまだ無い。
+            // それまで使っていたセクションのセッションを 1 度だけ引き継ぎ元にして、
+            // 積み上げた文脈を申し送りの形で残す
+            var section = store.Get(lineageKey[..^"|lineage".Length]);
+            if (section == null || string.IsNullOrWhiteSpace(section.SessionId)) return null;
+            Logger.Log("ページ単位に切り替わったので、これまでのセクションの会話から引き継ぎます");
+            lineage = section;
+        }
+
+        var previous = string.IsNullOrWhiteSpace(lineage.Summary) ? null : lineage.Summary;
+        try
+        {
+            Logger.Log($"新しいページなので、前のセッション {lineage.SessionId} に申し送りを書かせます");
+            var r = await AskEngineAsync(cfg, cfg.HandoffSummaryPromptText, cwd, lineage.SessionId,
+                addDirs, null, ct);
+            var summary = r.Text.Trim();
+            if (summary.Length == 0)
+            {
+                Logger.Log("申し送りが空でした");
+            }
+            else
+            {
+                store.UpdateSummary(lineageKey, summary);
+                Logger.Log($"申し送り ({summary.Length}文字): {Shorten(summary, 120)}");
+                previous = summary;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"申し送りの作成に失敗しました。{(previous == null ? "引き継がずに続けます" : "前回の申し送りを使います")}: {ex.Message}");
+        }
+
+        return previous == null ? null : cfg.HandoffPromptText.Replace("{summary}", previous);
+    }
+
+    private static string Shorten(string s, int max) =>
+        s.Length <= max ? s.Replace("\n", " ") : s[..max].Replace("\n", " ") + "…";
+
+    private static string Prepend(string? handoff, string prompt) =>
+        string.IsNullOrEmpty(handoff) ? prompt : handoff + "\n" + prompt;
+
+    /// <summary>
+    /// 使ったセッション ID を保存する。ページ単位のときは、次に別のページを開いたときに
+    /// 「直前のセッション」として辿れるよう、系統の鍵にも同じ ID を書いておく。
+    /// </summary>
+    private static void SaveSession(SessionStore? store, string? scopeKey, string? lineageKey, string? sessionId)
+    {
+        if (store == null || string.IsNullOrWhiteSpace(sessionId)) return;
+        if (scopeKey != null) store.Update(scopeKey, sessionId!);
+        if (lineageKey != null) store.Update(lineageKey, sessionId!);
     }
 
     public async Task<AskResult> RunAsync(Action<string>? onProgress = null, CancellationToken ct = default)
@@ -243,26 +321,19 @@ public sealed class AskFlow
         }
 
         // 会話セッションの解決: セクション (既定) またはページ単位で claude セッションを継続する
-        var scopeKey = cfg.SessionScope.ToLowerInvariant() switch
-        {
-            "off" => null,
-            "page" => pageId,
-            _ => !string.IsNullOrEmpty(sectionId) ? sectionId : pageId,
-        };
-        var store = scopeKey != null ? new SessionStore() : null;
-        var entry = scopeKey != null ? store!.Get(scopeKey) : null;
+        var (scopeKey, lineageKey, store, entry) = ResolveSession(cfg, pageId, sectionId);
         var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
         var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
 
         var addDirs = cfg.ExpandedAddDirs;
+        var handoff = await PrepareHandoffAsync(cfg, store, lineageKey, resumeId == null, runCwd, addDirs, ct);
         var outcome = await AskWithContinuityAsync(cfg,
-            resumed => BuildPrompt(cfg, sel, render, resumed),
+            resumed => Prepend(handoff, BuildPrompt(cfg, sel, render, resumed)),
             runCwd, resumeId, addDirs, onProgress, ct);
         var result = outcome.Result;
 
         // -p --resume は毎回新しいセッション ID にフォークする実装もあるため、常に最新 ID を保存する
-        if (scopeKey != null && !string.IsNullOrWhiteSpace(result.SessionId))
-            store!.Update(scopeKey, result.SessionId!);
+        SaveSession(store, scopeKey, lineageKey, result.SessionId);
 
         var parts = ResponseParser.Parse(result.Text);
         var figures = parts.Count(p => p is ImagePart or InkPart);

@@ -18,6 +18,16 @@ public sealed class SessionEntry
     [JsonPropertyName("label")]
     public string? Label { get; set; }
 
+    /// <summary>
+    /// 次の会話へ渡す申し送り。ページを変えて会話を作り直すとき、前のページの
+    /// セッションに書かせたものをここに置き、新しいセッションの最初のプロンプトに添える。
+    /// </summary>
+    [JsonPropertyName("summary")]
+    public string? Summary { get; set; }
+
+    [JsonPropertyName("summaryAt")]
+    public DateTime? SummaryAt { get; set; }
+
     [JsonPropertyName("updatedAt")]
     public DateTime UpdatedAt { get; set; }
 }
@@ -72,6 +82,19 @@ public sealed class SessionStore
         {
             _map[key] = new SessionEntry { SessionId = sessionId, Label = label, UpdatedAt = DateTime.Now };
         }
+        Save();
+    }
+
+    /// <summary>申し送りだけを更新する (セッション ID は触らない)。</summary>
+    public void UpdateSummary(string key, string summary)
+    {
+        if (!_map.TryGetValue(key, out var e))
+        {
+            e = new SessionEntry { UpdatedAt = DateTime.Now };
+            _map[key] = e;
+        }
+        e.Summary = summary;
+        e.SummaryAt = DateTime.Now;
         Save();
     }
 
