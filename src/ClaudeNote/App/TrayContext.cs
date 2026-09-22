@@ -27,6 +27,17 @@ public sealed class TrayContext : ApplicationContext
     {
         _store = store;
         var config = store.Current;
+
+        // 設定が読めないと既定値で動いてしまう (workspaceDir もプロファイルも
+        // API キーも消える)。黙って動かれると原因が分からないので必ず見せる
+        if (AppConfig.LastLoadError != null)
+        {
+            MessageBox.Show(
+                "設定ファイルを読めなかったので、すべて既定値で動いています。\n" +
+                "JSON の書式 (カンマ、引用符、パスの \\ の数) を確認してください。\n\n" +
+                AppConfig.LastLoadError,
+                "ClaudeNote の設定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
         _flow = new AskFlow(() => _store.Current);
 
         _icon = new NotifyIcon

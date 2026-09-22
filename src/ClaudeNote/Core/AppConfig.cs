@@ -550,22 +550,36 @@ public sealed class AppConfig
         return Load(path);
     }
 
+    /// <summary>
+    /// 直近の <see cref="Load"/> が失敗した理由。成功していれば null。
+    /// 失敗すると workspaceDir もプロファイルも API キーも既定値に戻ってしまい、
+    /// ログを見るまで気づけないため、起動時に知らせるために残しておく。
+    /// </summary>
+    public static string? LastLoadError { get; private set; }
+
     public static AppConfig Load(string path)
     {
         try
         {
-            if (!File.Exists(path)) return new AppConfig();
+            if (!File.Exists(path))
+            {
+                LastLoadError = null;
+                return new AppConfig();
+            }
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+            var loaded = JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true,
                 ReadCommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
             }) ?? new AppConfig();
+            LastLoadError = null;
+            return loaded;
         }
         catch (Exception ex)
         {
             Logger.Log($"設定ファイルの読み込みに失敗、デフォルトを使用: {ex.Message}");
+            LastLoadError = $"{path}\n\n{ex.Message}";
             return new AppConfig();
         }
     }
