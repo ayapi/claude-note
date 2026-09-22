@@ -10,6 +10,7 @@ namespace ClaudeNote;
 ///   --ask-test &lt;png&gt; [sessionId]     : PNG を claude CLI に送って応答を表示 (挿入なし)。sessionId 指定で resume 検証
 ///   --insert-test                        : テストページを作成して挿入 → 検証 → ページ削除
 ///   --figure-test                        : 図 (画像 + インク) の挿入を検証 → ページ削除
+///   --diff-test                          : ページの差分検出を試す。Enter のたびに「前回の送信から書かれた範囲」を出す
 ///   --update-hooks                       : 設定の updateHooks だけを実行する (本体の更新はしない)
 ///   --mic-list                           : 録音デバイスの一覧
 ///   --record-test [秒]                   : 指定秒だけ録音して文字起こしまで通す
@@ -34,6 +35,8 @@ internal static class DebugCommands
                     return UpdateCheck();
                 case "--update-hooks":
                     return UpdateHooks(config);
+                case "--diff-test":
+                    return DiffTest(args.Length > 1 && int.TryParse(args[1], out var ds) ? ds : 0);
                 case "--update-apply":
                     return UpdateApply();
                 case "--capture-test":
@@ -126,6 +129,163 @@ internal static class DebugCommands
                 Console.WriteLine("    " + line);
         }
         return results.All(r => r.Ok) ? 0 : 1;
+    }
+
+    /// <summary>
+    /// ページの差分検出を試す。Enter を「送るボタンを押した」とみなして、
+    /// 前回の送信からいま までに書かれた範囲を出す。
+    ///
+    /// 手で範囲選択させる代わりに「書いたものだけ送る」ことができるかを確かめるためのもの。
+    /// 実際の送信や挿入は一切しない。自前のコンソールウィンドウで動く。
+    /// 本番と同じく、1 回の押下につき 1 つの範囲が出る (書いている途中は何もしない)。
+    /// </summary>
+    private static int DiffTest(int unusedMs)
+    {
+        using var onenote = new OneNoteApp();
+        var (pageId, _) = onenote.GetCurrentContext();
+        if (string.IsNullOrEmpty(pageId))
+        {
+            Console.WriteLine("OneNote でページを開いた状態で実行してください。");
+            return 1;
+        }
+
+        var baseline = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+        Logger.Log($"--diff-test 開始: page={pageId} 基準 {baseline.Objects.Count} 個");
+        Console.WriteLine($"ページ: {pageId}");
+        Console.WriteLine($"基準: オブジェクト {baseline.Objects.Count} 個");
+        Console.WriteLine();
+        Console.WriteLine("OneNote に問題を解いて、書き終わったらこのウィンドウで Enter。");
+        Console.WriteLine("(Enter = 送るボタンを押したつもり。q + Enter で終了)");
+        Console.WriteLine(new string('-', 70));
+
+        var round = 0;
+        while (true)
+        {
+            Console.Write("> ");
+            var line = Console.ReadLine();
+            if (line == null || line.Trim().Equals("q", StringComparison.OrdinalIgnoreCase)) break;
+
+            PageSnapshot now;
+            try
+            {
+                now = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"    取得できませんでした: {Summarize(ex.Message)}");
+                Logger.Log($"--diff-test: 取得に失敗: {ex.Message}");
+                continue;
+            }
+
+            round++;
+            var changes = now.ChangesSince(baseline.ToBaseline());
+            var added = changes.Count(c => c.Kind == PageChangeKind.Added);
+            var grown = changes.Count(c => c.Kind == PageChangeKind.Grown);
+            var bounds = PageSnapshot.BoundsOf(changes);
+
+            Console.WriteLine($"[{round}] オブジェクト {baseline.Objects.Count} → {now.Objects.Count} 個 / " +
+                $"新規 {added}・拡大 {grown}");
+            Logger.Log($"--diff-test [{round}]: {baseline.Objects.Count} → {now.Objects.Count} 個 / " +
+                $"新規 {added}・拡大 {grown} / 範囲 " + (bounds is System.Windows.Rect lb
+                    ? $"x {lb.X:0}〜{lb.Right:0} y {lb.Y:0}〜{lb.Bottom:0}pt" : "なし"));
+
+            if (bounds is not System.Windows.Rect b)
+            {
+                Console.WriteLine("    差分なし (何も書かれていない)。音声だけ送る場合はここに当たる");
+                continue;
+            }
+
+            Console.WriteLine($"    → 送る範囲: x {b.X:0}〜{b.Right:0}pt / y {b.Y:0}〜{b.Bottom:0}pt " +
+                $"({b.Width:0}x{b.Height:0}pt)");
+
+            // 内訳は多いと読みにくいので、上から数本だけ
+            foreach (var c in changes.OrderBy(c => c.Object.Rect?.Y ?? 0).ThenBy(c => c.Object.Rect?.X ?? 0).Take(5))
+            {
+                var r = c.Object.Rect ?? default;
+                var mark = c.Kind switch
+                {
+                    PageChangeKind.Added => "新規",
+                    PageChangeKind.Grown => "拡大",
+                    _ => "書換",
+                };
+                Console.WriteLine($"       {mark} {c.Object.Kind,-11} x={r.X,6:0} y={r.Y,6:0} " +
+                    $"{r.Width,5:0}x{r.Height,-5:0}");
+            }
+            if (changes.Count > 5) Console.WriteLine($"       … ほか {changes.Count - 5} 個");
+
+            // 数字だけでは広すぎ/狭すぎが判断できないので、実際に送られる画像を出す
+            var png = RenderDiff(onenote, pageId, changes, round);
+            if (png != null)
+            {
+                Console.WriteLine($"    → 画像: {png}");
+                OpenFile(png);
+            }
+
+            // 本番では応答を挿入したあとに基準を取り直す。ここでは送ったことにして更新する
+            baseline = now;
+        }
+
+        Console.WriteLine(new string('-', 70));
+        Console.WriteLine($"終了しました (送信相当 {round} 回)。");
+        Logger.Log($"--diff-test 終了: {round} 回");
+        return 0;
+    }
+
+    /// <summary>
+    /// 差分に当たるインクだけを描画して、実際に Claude へ送られる画像を作る。
+    /// 失敗しても差分の確認自体は続けたいので、例外は握って null を返す。
+    /// </summary>
+    private static string? RenderDiff(OneNoteApp onenote, string pageId,
+        IReadOnlyList<PageChange> changes, int round)
+    {
+        try
+        {
+            var ids = changes.Select(c => c.Object.ObjectId).ToHashSet();
+            // 描画には ISF が要るのでバイナリ込みで取り直す
+            var sel = PageSnapshot.BuildSelection(onenote.GetPageXml(pageId), ids);
+            if (!sel.HasRenderableData)
+            {
+                Console.WriteLine($"    (描画できる中身がありません: 図 {sel.VisualCount} 個)");
+                return null;
+            }
+
+            var dir = Path.Combine(Logger.BaseDir, "difftest");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{round}.png");
+
+            var result = SelectionRenderer.RenderToPng(sel, path);
+            if (result == null) return null;
+            Console.WriteLine($"    → 画像サイズ: {result.WidthPx}x{result.HeightPx}px");
+            return path;
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"--diff-test: 差分の描画に失敗: {ex.Message}");
+            Console.WriteLine($"    (描画に失敗: {Summarize(ex.Message)})");
+            return null;
+        }
+    }
+
+    /// <summary>既定のビューアで開く。開けなくても致命的ではない。</summary>
+    private static void OpenFile(string path)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"--diff-test: 画像を開けませんでした: {ex.Message}");
+        }
+    }
+
+    private static string Summarize(string message)
+    {
+        var line = message.Replace("\r\n", " ").Replace('\n', ' ').Trim();
+        return line.Length <= 80 ? line : line[..80] + "…";
     }
 
     /// <summary>
