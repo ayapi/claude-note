@@ -37,10 +37,10 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 
 `sessionScope` で、どの単位で claude の会話を続けるかを決めます。
 
-- `section` (既定) — 同じセクションならずっと同じ会話。文脈が積み上がる代わりに、
+- `page` (既定) — OneNote のページを新しくするたびに会話を作り直します。会話が短く保たれます
+- `section` — 同じセクションならずっと同じ会話。文脈が積み上がる代わりに、
   使い込むほど 1 往復の入力が膨らみ、応答が遅く高くなります。会話が長くなりすぎると
-  精度も落ちます
-- `page` — OneNote のページを新しくするたびに会話を作り直します。会話が短く保たれます
+  精度も落ちます (実績: 8/9〜9/5 の算数セクションで 1 往復 46K → 296K トークン)
 - `off` — 毎回まっさらな会話
 
 `page` にすると話の流れが切れてしまうため、`sessionHandoff`(既定で有効)を併せて使います。
@@ -103,7 +103,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `useClipboardCapture` | 選択インクをコピー経由で取得する (既定 true、下記)。false で従来の COM 経由 |
 | `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowSelection` は選択範囲の真下。x 座標はどちらも選択範囲の左端に揃う |
 | `keepArtifacts` | キャプチャ PNG と応答を `%LOCALAPPDATA%\ClaudeNote\workspace\captures` に残す |
-| `sessionScope` | 会話継続の単位。`section` (既定) / `page` / `off` (毎回新規) |
+| `sessionScope` | 会話継続の単位。`page` (既定) / `section` / `off` (毎回新規) |
 | `workspaceDir` | Claude の作業ディレクトリ。`null` で `%LOCALAPPDATA%\ClaudeNote\workspace` |
 | `engine` | `sdk` (Agent SDK サイドカー、既定) / `cli` (claude -p フォールバック) |
 | `addDirs` | 作業ディレクトリ外で読み取りを許可するフォルダ。既定は Downloads / Documents / Videos / Pictures / Desktop。環境変数展開可 |

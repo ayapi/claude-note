@@ -127,11 +127,14 @@ public sealed class AppConfig
     public bool KeepArtifacts { get; set; } = true;
 
     /// <summary>
-    /// 会話セッションの継続単位。"section" = OneNote のセクションごとに会話を継続 (既定)、
-    /// "page" = ページごと、"off" = 毎回新規会話。
+    /// 会話セッションの継続単位。"page" = OneNote のページごとに会話を作り直す (既定)、
+    /// "section" = セクションごとに会話を継続、"off" = 毎回新規会話。
+    /// section だと同じセクションで会話が延々と続き、1 往復あたりの入力が
+    /// 46K → 296K トークンまで膨らんだ実績がある。page + SessionHandoff なら
+    /// 申し送りで話の流れを保ったまま会話を短く保てる。
     /// </summary>
     [JsonPropertyName("sessionScope")]
-    public string SessionScope { get; set; } = "section";
+    public string SessionScope { get; set; } = "page";
 
     /// <summary>claude CLI の作業ディレクトリ。null なら %LOCALAPPDATA%\ClaudeNote\workspace。</summary>
     [JsonPropertyName("workspaceDir")]
