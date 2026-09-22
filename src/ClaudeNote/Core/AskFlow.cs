@@ -170,8 +170,20 @@ public sealed class AskFlow
         Selection sel;
         if (inkCount > 0)
         {
-            onProgress?.Invoke($"書いた内容を取得しています… (手書き {inkCount} 個)");
             var ids = changes.Select(c => c.Object.ObjectId).ToHashSet();
+
+            // 書いた場所に既にあった図も一緒に送る (補助線だけでは意味が通らないため)
+            if (cfg.IncludeOverlapping)
+            {
+                var (expanded, _, addedCount) = PageSnapshot.ExpandToOverlapping(
+                    snapshot, ids, PageSnapshot.BoundsOf(changes),
+                    cfg.OverlapMarginPt, cfg.OverlapMaxObjects);
+                if (addedCount > 0)
+                    Logger.Log($"書いた場所に重なる既存の図を {addedCount} 個も一緒に送ります");
+                ids = expanded;
+            }
+
+            onProgress?.Invoke($"書いた内容を取得しています… (手書き {ids.Count} 個)");
             sel = PageSnapshot.BuildSelection(onenote.GetPageXml(pageId), ids);
         }
         else

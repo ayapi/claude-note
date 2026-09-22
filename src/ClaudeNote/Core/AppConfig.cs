@@ -122,6 +122,21 @@ public sealed class AppConfig
         ResponseWidthChars > 0 ? ResponseWidthChars * ResponseCharWidthPt : null;
 
     /// <summary>
+    /// 新しく書かれた範囲に重なる、古い図や手書きも一緒に送るか。
+    /// 図の上に補助線を引いたとき、補助線だけでは意味が通らないため既定で有効。
+    /// </summary>
+    [JsonPropertyName("includeOverlapping")]
+    public bool IncludeOverlapping { get; set; } = true;
+
+    /// <summary>重なり判定を何 pt ぶん広げて見るか。近くにある図も拾いたいとき用。</summary>
+    [JsonPropertyName("overlapMarginPt")]
+    public double OverlapMarginPt { get; set; } = 8;
+
+    /// <summary>巻き込みで送るオブジェクト数の上限 (暴走を防ぐ)。</summary>
+    [JsonPropertyName("overlapMaxObjects")]
+    public int OverlapMaxObjects { get; set; } = 600;
+
+    /// <summary>
     /// Claude に送るキャプチャ画像の背景。"auto" (既定) はインクの明るさから
     /// 白か暗色かを選ぶ。"white" / "black" / "transparent" / "#RRGGBB" も指定可。
     /// 透明にすると、表示側の合成色によっては黒インクが読めなくなる。
@@ -473,6 +488,9 @@ public sealed class AppConfig
             ResponseWidthChars = ResponseWidthChars,
             ResponseCharWidthPt = ResponseCharWidthPt,
             CaptureBackground = CaptureBackground,
+            IncludeOverlapping = IncludeOverlapping,
+            OverlapMarginPt = OverlapMarginPt,
+            OverlapMaxObjects = OverlapMaxObjects,
             InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
             SessionScope = profile.SessionScope ?? SessionScope,

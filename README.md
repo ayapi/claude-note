@@ -141,6 +141,9 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `responseWidthChars` | 応答テキストの横幅 (全角の文字数、既定 35)。0 以下で書かれた部分の幅に合わせる |
 | `responseCharWidthPt` | 全角 1 文字ぶんの幅 (pt、既定 11)。OneNote の本文フォントのサイズと同じ値にする |
 | `captureBackground` | 送信する画像の背景。`auto` (既定) はインクの明るさで白/暗色を選ぶ。`white` / `black` / `transparent` / `#RRGGBB` も可 |
+| `includeOverlapping` | 書いた場所に重なる古い図も一緒に送る (既定 true、[下記](#書いた場所に重なるものも送る)) |
+| `overlapMarginPt` | 重なり判定を広げる余白 (pt、既定 8) |
+| `overlapMaxObjects` | 巻き込みで送る上限個数 (既定 600) |
 | `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowWriting` は今回書かれた部分の真下。x 座標はどちらも書かれた部分の左端に揃う |
 | `keepArtifacts` | キャプチャ PNG と応答を `%LOCALAPPDATA%\ClaudeNote\workspace\captures` に残す |
 | `sessionScope` | 会話継続の単位。`page` (既定) / `section` / `off` (毎回新規) |
@@ -378,6 +381,18 @@ objectID → 指紋 (手書きは位置と大きさ、段落は本文のハッ�
 |---|---|
 | 併合 (objectID 据え置きで矩形だけ拡大) | 7 回の書き込みで 0 回。ストロークは毎回新しい objectID で足される |
 | 取得と突き合わせ | `--bench-capture` で段階ごとに計測できる |
+
+### 書いた場所に重なるものも送る
+
+増えたぶんだけを送ると、**図形問題で図の上に補助線を引いたとき**に補助線しか
+送られず、絵として意味が通らない。そこで、新しく書かれた範囲に重なる古い図や
+手書きも一緒に送る (`includeOverlapping`、既定で有効)。
+
+巻き込んだぶんで範囲が広がると、さらに別の図と重なることがあるので、変化が
+無くなるまで繰り返す (`overlapMaxObjects` で打ち切り)。`overlapMarginPt` (既定 8pt)
+だけ広げて判定するので、線のすぐ隣にある図も拾える。
+
+段落は巻き込まない。文字はすでに会話の中にあり、絵として送り直す必要が無いため。
 
 **基準が無いページ** (初めて送る、または会話をリセットした直後) では、
 ページにあるものすべてが「新しく書かれたもの」になる。

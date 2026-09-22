@@ -169,6 +169,53 @@ public sealed class PageSnapshot
             .Select(c => c.Object.Text!.Trim()));
 
     /// <summary>
+    /// 新しく書かれた範囲に重なる、古い図や手書きも巻き込む。
+    ///
+    /// 図形問題で図の上に補助線を引いた場合、増えたのは補助線だけなので、
+    /// そのまま送ると元の図が無い絵になってしまう。書いた場所に既にあったものは
+    /// 一緒に送らないと意味が通らない。
+    ///
+    /// 巻き込んだぶんで範囲が広がると、さらに別のものと重なることがあるので
+    /// 変化が無くなるまで繰り返す (上限あり)。段落は対象にしない
+    /// (文字はすでに会話の中にあり、絵として送り直す必要が無いため)。
+    /// </summary>
+    public static (HashSet<string> Ids, Rect? Bounds, int AddedCount) ExpandToOverlapping(
+        PageSnapshot snapshot, IEnumerable<string> seedIds, Rect? seedBounds,
+        double marginPt, int maxObjects)
+    {
+        var ids = new HashSet<string>(seedIds, StringComparer.Ordinal);
+        var bounds = seedBounds;
+        var added = 0;
+        if (bounds is null) return (ids, bounds, 0);
+
+        // 範囲が広がるたびに拾い直す。増えなくなったら終わり
+        for (var pass = 0; pass < 5; pass++)
+        {
+            var grown = false;
+            var probe = (Rect)bounds!;
+            if (marginPt > 0) probe.Inflate(marginPt, marginPt);
+
+            foreach (var (id, obj) in snapshot.Objects)
+            {
+                if (obj.IsText || ids.Contains(id)) continue;
+                if (obj.Rect is not Rect r || !r.IntersectsWith(probe)) continue;
+                if (ids.Count >= maxObjects)
+                {
+                    Logger.Log($"重なり判定: 上限 {maxObjects} 個に達したので打ち切りました");
+                    return (ids, bounds, added);
+                }
+
+                ids.Add(id);
+                added++;
+                bounds = Rect.Union((Rect)bounds!, r);
+                grown = true;
+            }
+            if (!grown) break;
+        }
+        return (ids, bounds, added);
+    }
+
+    /// <summary>
     /// 指定した objectID のものだけを集めた Selection を作る。差分の範囲を
     /// そのまま描画して「実際に送られる画像」にするために使う。
     /// バイナリ込みのページ XML (GetPageXml) を渡すこと。
