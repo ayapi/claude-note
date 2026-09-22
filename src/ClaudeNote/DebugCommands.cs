@@ -6,7 +6,7 @@ namespace ClaudeNote;
 /// <summary>
 /// 動作検証用のコマンドラインモード。
 ///   --render-test &lt;pageXml&gt; &lt;outPng&gt; : 保存済みページ XML の全 ink/画像を PNG 化
-///   --capture-test                       : いま OneNote で選択中の内容をキャプチャして PNG 化 (挿入なし)
+///   --capture-test                       : 前回から書かれたぶんをキャプチャして PNG 化 (挿入なし)
 ///   --ask-test &lt;png&gt; [sessionId]     : PNG を claude CLI に送って応答を表示 (挿入なし)。sessionId 指定で resume 検証
 ///   --insert-test                        : テストページを作成して挿入 → 検証 → ページ削除
 ///   --figure-test                        : 図 (画像 + インク) の挿入を検証 → ページ削除
@@ -76,8 +76,6 @@ internal static class DebugCommands
                     return VoiceInsertTest(config);
                 case "--cancel-test":
                     return CancelTest(config);
-                case "--selection-test":
-                    return SelectionTest(args[1]);
                 case "--multipart-test":
                     return MultipartTest(config);
                 case "--width-test":
@@ -438,23 +436,27 @@ internal static class DebugCommands
             return 1;
         }
 
-        // まず軽い取得で選択状態だけ見る (インクの多いページでも速い)
-        var quick = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
-        Console.WriteLine($"OneNote の報告: {quick.Diagnostics}");
-        Console.WriteLine($"判定: 図={quick.VisualCount} textLen={quick.Text.Length} (軽い XML なので中身はまだ無い)");
-        if (!quick.HasVisual)
+        // 実際の送信と同じく「前回から書き足されたぶん」を取り込む
+        var snapshot = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+        var baseline = BaselineStore.Load(pageId);
+        var changes = snapshot.ChangesSince(baseline);
+        Console.WriteLine($"ページ全体 {snapshot.Objects.Count} 個 / 基準 {baseline?.Fingerprints.Count ?? 0} 個 " +
+            $"→ 差分 {changes.Count} 個");
+        if (baseline == null)
+            Console.WriteLine("(このページの基準がまだ無いので、全件が差分として出ています)");
+        if (changes.Count == 0)
         {
-            Console.WriteLine(quick.IsEmpty
-                ? "→ 何も選択されていないと判定"
-                : "→ テキストのみ選択と判定 (図は含まれない)");
+            Console.WriteLine("→ 前回から書き足されたものはありません");
             return 0;
         }
 
-        var sel = PageXml.ParseSelection(onenote.GetPageXml(pageId));
-        Console.WriteLine($"selected: ink={sel.Ink.Count} images={sel.Images.Count} textLen={sel.Text.Length} bounds={sel.BoundsPt}");
-        if (!sel.HasVisual)
+        var sel = PageSnapshot.BuildSelection(onenote.GetPageXml(pageId),
+            changes.Select(c => c.Object.ObjectId).ToHashSet());
+        Console.WriteLine($"差分の中身: ink={sel.Ink.Count} images={sel.Images.Count} " +
+            $"textLen={sel.Text.Length} bounds={sel.BoundsPt}");
+        if (!sel.HasRenderableData)
         {
-            Console.WriteLine("ink/画像の選択なし");
+            Console.WriteLine("描画できる手書き・画像はありません (テキストだけの差分)");
             return 0;
         }
         var outPng = Path.Combine(Logger.CapturesDir, "capture-test.png");
@@ -663,8 +665,8 @@ internal static class DebugCommands
     }
 
     /// <summary>
-    /// 音声入力のプロンプトに、いま選択している内容が実際に入るかを確認する。
-    /// テキスト選択が丸ごと落ちていた不具合の再発防止。
+    /// 音声入力のプロンプトに、書かれた内容が実際に入るかを確認する。
+    /// テキストが丸ごと落ちていた不具合の再発防止。
     /// </summary>
     private static int VoicePromptTest(AppConfig config)
     {
@@ -676,41 +678,44 @@ internal static class DebugCommands
             ? config.ResolveForSection(onenote.GetSectionName(sectionId), out _)
             : config;
 
-        var sel = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
-        Console.WriteLine($"選択: 手書き={sel.SelectedInkCount} 画像={sel.SelectedImageCount} テキスト={sel.Text.Length}文字");
+        var snap = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+        var changed = snap.ChangesSince(BaselineStore.Load(pageId));
+        var sel = PageSnapshot.BuildSelection(onenote.GetPageXml(pageId),
+            changed.Select(c => c.Object.ObjectId).ToHashSet());
+        Console.WriteLine($"差分: 手書き={sel.Ink.Count} 画像={sel.Images.Count} テキスト={sel.Text.Length}文字");
 
-        // 選択が無いときは、配線が正しいかを合成テキストで確かめる
+        // 差分が無いときは、配線が正しいかを合成テキストで確かめる
         if (string.IsNullOrWhiteSpace(sel.Text))
         {
             sel.Text = "想定投資 1人月 × 80万円 = 80万円 / ROI = 営業利益 ÷ 投資 = 2137.5%";
-            Console.WriteLine($"(選択が無いので合成テキストで検証: {sel.Text.Length}文字)");
+            Console.WriteLine($"(差分が無いので合成テキストで検証: {sel.Text.Length}文字)");
         }
 
         // AskFlow.RunVoiceAsync と同じ組み立て
-        var selectionParts = new List<string>();
+        var writingParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(sel.Text))
-            selectionParts.Add($"ノート上で選択されていたテキスト:\n---\n{sel.Text}\n---");
-        var voiceSelection = selectionParts.Count > 0
-            ? string.Join("\n", selectionParts)
-            : "（ノート上では何も選択されていません。発言だけで答えてください）";
+            writingParts.Add($"前回から新しく書かれたテキスト:\n---\n{sel.Text}\n---");
+        var voiceWriting = writingParts.Count > 0
+            ? string.Join("\n", writingParts)
+            : "（前回から新しく書かれたものはありません。発言だけで答えてください）";
 
         var prompt = cfg.VoicePromptTemplateText
             .Replace("{voice}", "これで合ってるか見て")
-            .Replace("{voiceSelection}", voiceSelection)
+            .Replace("{voiceWriting}", voiceWriting)
             .Replace("{image}", "")
             .Replace("{figureGuide}", cfg.FigureGuideText);
 
         var included = !string.IsNullOrWhiteSpace(sel.Text) && prompt.Contains(sel.Text);
         Console.WriteLine();
         Console.WriteLine("---- プロンプトの該当箇所 ----");
-        var idx = prompt.IndexOf("選択されていたテキスト", StringComparison.Ordinal);
+        var idx = prompt.IndexOf("新しく書かれたテキスト", StringComparison.Ordinal);
         Console.WriteLine(idx >= 0
             ? prompt.Substring(idx, Math.Min(300, prompt.Length - idx))
-            : "(選択テキストの記載なし)");
+            : "(テキストの記載なし)");
         Console.WriteLine();
         Console.WriteLine(sel.Text.Length == 0
-            ? "テキスト選択が無いため判定不能 (テキストを選択して再実行してください)"
-            : included ? "OK: 選択テキストがプロンプトに含まれています" : "NG: 選択テキストが落ちています");
+            ? "テキストの差分が無いため判定不能 (ノートに文字を書いてから再実行してください)"
+            : included ? "OK: 書かれたテキストがプロンプトに含まれています" : "NG: 書かれたテキストが落ちています");
         return sel.Text.Length == 0 ? 0 : (included ? 0 : 1);
     }
 
@@ -737,54 +742,38 @@ internal static class DebugCommands
             return ms;
         }
 
-        var lightXml = onenote.GetPageXmlSelectionOnly(pageId);
-        Lap($"1) 選択のみ取得 ({lightXml.Length / 1024.0 / 1024.0:0.0} MB)");
+        var lightXml = onenote.GetPageXmlBasic(pageId);
+        Lap($"1) 軽い XML を取得 ({lightXml.Length / 1024.0 / 1024.0:0.0} MB)");
 
-        var lightSel = PageXml.ParseSelection(lightXml);
-        Lap($"2) 選択の解析 (図={lightSel.VisualCount})");
+        var snapshot = PageSnapshot.FromXml(lightXml);
+        Lap($"2) 差分用の解析 (オブジェクト {snapshot.Objects.Count} 個)");
 
-        // コピー経由 (新しい既定の経路)
-        if (lightSel.HasVisual && config.UseClipboardCapture)
+        var baseline = BaselineStore.Load(pageId);
+        var changes = snapshot.ChangesSince(baseline);
+        var inkChanges = changes.Count(c => !c.Object.IsText);
+        Lap($"3) 基準と突き合わせ (差分 {changes.Count} 個 / うち手書き {inkChanges})");
+
+        if (baseline == null)
+            Console.WriteLine("   (このページの基準がまだ無いので、全件が差分として出ています)");
+        if (inkChanges == 0)
         {
-            var isf = ClipboardInk.TryCopySelection();
-            var ms = Lap($"2b) コピー経由でインク取得 ({(isf == null ? "失敗" : $"{isf.Length:N0} bytes")})");
-            if (isf != null && lightSel.BoundsPt is System.Windows.Rect r)
-            {
-                var quick = new Selection { PageId = pageId, VisualCount = lightSel.VisualCount };
-                quick.Ink.Add(new InkItem(isf, r));
-                quick.BoundsPt = lightSel.BoundsPt;
-                var qpng = Path.Combine(Path.GetTempPath(), "claudenote-bench-clip.png");
-                var qr = SelectionRenderer.RenderToPng(quick, qpng, config.CaptureBackground);
-                Lap($"2c) コピー経由で描画 ({qr?.WidthPx}x{qr?.HeightPx}px)");
-                Console.WriteLine($"    → コピー経由の合計: {ms + 0:N0} ms + 描画  / 画像: {qpng}");
-            }
-            Console.WriteLine();
-            Console.WriteLine("--- 以下は比較用の従来経路 (COM でページ全体を取得) ---");
-        }
-
-        // 選択が無いときは、ページ全体を対象にして最悪ケースを測る
-        var wholePage = !lightSel.HasVisual;
-        if (wholePage)
-            Console.WriteLine("   (選択が無いので、ページ全体を対象に最悪ケースを測ります)");
-
-        var fullXml = onenote.GetPageXml(pageId);
-        Lap($"3) ISF込みで取得 ({fullXml.Length / 1024.0 / 1024.0:0.0} MB)");
-
-        var sel = wholePage ? PageXml.ParseAll(fullXml) : PageXml.ParseSelection(fullXml);
-        Lap($"4) ISF込みの解析 (ink={sel.Ink.Count})");
-        if (sel.Ink.Count == 0)
-        {
-            Console.WriteLine("インクが無いため、ここまで。");
+            Console.WriteLine("手書きの差分が無いため、ここまで。");
             return 0;
         }
 
+        var fullXml = onenote.GetPageXml(pageId);
+        Lap($"4) ISF込みで取得 ({fullXml.Length / 1024.0 / 1024.0:0.0} MB)");
+
+        var sel = PageSnapshot.BuildSelection(fullXml, changes.Select(c => c.Object.ObjectId).ToHashSet());
+        Lap($"5) 差分ぶんの取り出し (ink={sel.Ink.Count})");
+
         var outPng = Path.Combine(Path.GetTempPath(), "claudenote-bench.png");
         var render = SelectionRenderer.RenderToPng(sel, outPng, config.CaptureBackground);
-        Lap($"5) 描画 ({render?.WidthPx}x{render?.HeightPx}px)");
+        Lap($"6) 描画 ({render?.WidthPx}x{render?.HeightPx}px)");
 
         Console.WriteLine();
-        var pageInk = System.Xml.Linq.XDocument.Parse(lightXml).Descendants(PageXml.One + "InkDrawing").Count();
-        Console.WriteLine($"ページ全体のインク数: {pageInk} / 選択されたインク: {sel.Ink.Count}");
+        Console.WriteLine($"ページ全体 {snapshot.Objects.Count} 個 → 送るのは {sel.Ink.Count} 個");
+        Console.WriteLine($"画像: {outPng}");
         return 0;
     }
 
@@ -881,7 +870,7 @@ internal static class DebugCommands
             ("1-通常", _ => { }),
             ("2-処理中", b => b.SetBusy(true)),
             ("3-成功", b => b.Flash(true, "ノートに挿入しました")),
-            ("4-警告", b => b.Flash(false, "何も選択されていません")),
+            ("4-警告", b => b.Flash(false, "まだ何も書かれていません")),
         };
 
         foreach (var (name, setup) in states)
@@ -901,14 +890,6 @@ internal static class DebugCommands
         return 0;
     }
 
-    /// <summary>保存したページ XML に対して選択判定だけを走らせる (回帰テスト用)。</summary>
-    private static int SelectionTest(string xmlPath)
-    {
-        var sel = PageXml.ParseSelection(File.ReadAllText(xmlPath));
-        Console.WriteLine($"図={sel.VisualCount} ink={sel.Ink.Count} images={sel.Images.Count} " +
-            $"textLen={sel.Text.Length} bounds={sel.BoundsPt}");
-        return 0;
-    }
 
     /// <summary>
     /// 「実行 → 途中でキャンセル → すぐ次を実行」が正しく回るかを検証する。

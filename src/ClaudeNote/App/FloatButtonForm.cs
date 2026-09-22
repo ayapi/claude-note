@@ -293,8 +293,8 @@ public sealed class FloatButtonForm : Form
             : _busy
                 ? "Claude が考えています。押すと中断します"
                 : _longPressEnabled
-                    ? "タップ: 選択範囲を送る / 長押し: 音声で質問"
-                    : "タップ: 選択範囲を送る";
+                    ? "タップ: 書いたものを送る / 長押し: 音声で質問"
+                    : "タップ: 書いたものを送る";
         _tip.SetToolTip(this, text);
     }
 

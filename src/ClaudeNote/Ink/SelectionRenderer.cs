@@ -18,7 +18,7 @@ public sealed record RenderResult(
     string PngPath, int WidthPx, int HeightPx, int InkCount, int SkippedInk, int ImageCount, CaptureMap Map);
 
 /// <summary>
-/// 選択された ink (ISF) と画像を、ページ座標 (pt) に基づいて合成し透明 PNG に描画する。
+/// 送る ink (ISF) と画像を、ページ座標 (pt) に基づいて合成し透明 PNG に描画する。
 /// </summary>
 public static class SelectionRenderer
 {

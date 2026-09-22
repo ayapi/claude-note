@@ -2,12 +2,16 @@
 
 OneNote の手書きノートを Claude に読ませて、応答をノートに書き戻す常駐ツール。
 
-OneNote 上で範囲を選択してホットキー(既定: `Ctrl+Alt+A`)を押すと:
+ノートに書いてホットキー(既定: `Ctrl+Alt+A`)を押すと:
 
-1. 選択中の手書き(ink)・画像を、内部データ(ISF バイナリ)から **PNG** にレンダリング
+1. **前回送ってから新しく書かれたぶん**を自動で見つけ、手書き(ink)・画像を
+   内部データ(ISF バイナリ)から **PNG** にレンダリング
    (背景は既定で自動選択。透明にすると表示側の合成色しだいで黒インクが読めなくなる)
 2. **Claude Agent SDK**(常駐 Node サイドカー)経由で Claude に送信(**Claude Code のサブスク認証をそのまま利用**、API キー不要)
-3. Claude の応答テキストを、**選択範囲の真下**に色付きテキストとして挿入
+3. Claude の応答テキストを、ページ下端(既定)に色付きテキストとして挿入
+
+**範囲選択は不要。** ペンで書いてボタンを押すだけで、書いたぶんだけが送られる
+(ペンと選択モードを切り替える手間をなくすため)。仕組みは[下記](#送る範囲の決め方-差分)。
 
 数学の途中式チェックや図の添削など、手書き学習ノートのフィードバック用。
 
@@ -29,7 +33,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 
 実行中は exe がロックされるため、再ビルド時はトレイの「終了」で止めてから。
 
-起動するとタスクトレイに常駐します。OneNote でなげなわ選択やドラッグで範囲を選び、`Ctrl+Alt+A` を押してください。応答まで数秒〜十数秒かかります(トレイのバルーンで通知)。
+起動するとタスクトレイに常駐します。OneNote に書いてから `Ctrl+Alt+A` を押してください。応答まで数秒〜十数秒かかります(トレイのバルーンで通知)。
 
 スタートアップ登録したい場合は `shell:startup` フォルダに exe のショートカットを置いてください。
 
@@ -134,11 +138,10 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `claudePath` | claude CLI のフルパス。`null` なら PATH から探す |
 | `timeoutSeconds` | Claude 応答のタイムアウト |
 | `responseColor` | 挿入テキストの色 (CSS hex)。既定は紺色 `#1F4E79` |
-| `responseWidthChars` | 応答テキストの横幅 (全角の文字数、既定 35)。0 以下で従来どおり選択範囲の幅に合わせる |
+| `responseWidthChars` | 応答テキストの横幅 (全角の文字数、既定 35)。0 以下で書かれた部分の幅に合わせる |
 | `responseCharWidthPt` | 全角 1 文字ぶんの幅 (pt、既定 11)。OneNote の本文フォントのサイズと同じ値にする |
 | `captureBackground` | 送信する画像の背景。`auto` (既定) はインクの明るさで白/暗色を選ぶ。`white` / `black` / `transparent` / `#RRGGBB` も可 |
-| `useClipboardCapture` | 選択インクをコピー経由で取得する (既定 true、下記)。false で従来の COM 経由 |
-| `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowSelection` は選択範囲の真下。x 座標はどちらも選択範囲の左端に揃う |
+| `insertPosition` | 回答の挿入位置。`belowAll` (既定) はページ全体の下端 (空白部分)、`belowWriting` は今回書かれた部分の真下。x 座標はどちらも書かれた部分の左端に揃う |
 | `keepArtifacts` | キャプチャ PNG と応答を `%LOCALAPPDATA%\ClaudeNote\workspace\captures` に残す |
 | `sessionScope` | 会話継続の単位。`page` (既定) / `section` / `off` (毎回新規) |
 | `workspaceDir` | Claude の作業ディレクトリ。`null` で `%LOCALAPPDATA%\ClaudeNote\workspace` |
@@ -151,7 +154,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `profiles` | **セクション名で設定を切り替えるプロファイル** (下記) |
 
 フローティングボタンはフォーカスを奪わない (`WS_EX_NOACTIVATE`) ため、OneNote の
-選択状態を保ったままペンでタップできる。
+OneNote の状態を保ったままペンでタップできる。
 
 - **OneNote が前面のときだけ表示される** (`EVENT_SYSTEM_FOREGROUND` のフックで追従)。
   他のアプリを使っている間は邪魔にならない
@@ -159,7 +162,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
   **実行中の問い合わせをキャンセル**できる (ホットキーの再押下でも同じ)。
   キャンセルするとノートには何も挿入されず、会話セッションも更新されない
 - ボタンにカーソルを乗せると、いまの状態と押したときの動作が吹き出しで出る
-  (待機中「タップ: 選択範囲を送る / 長押し: 音声で質問」、録音中「離すと送ります」、
+  (待機中「タップ: 書いたものを送る / 長押し: 音声で質問」、録音中「離すと送ります」、
   処理中「押すと中断します」)
 - **長押しで音声入力** (下記)。押している間だけ録音し、離すと文字起こしされる
 - `%LOCALAPPDATA%\ClaudeNote\button.png` を置くと既定のスパークの代わりにその画像が使われる
@@ -171,11 +174,11 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 
 1. 文字起こし
 2. **文字起こしを先にノートへ挿入** (行頭に 💬、灰色)。認識が合っているかすぐ確認できる
-3. 文字起こし + **選択範囲のキャプチャ画像**を Claude に送信
+3. 文字起こし + **新しく書かれた部分のキャプチャ画像**を Claude に送信
 4. 回答を吹き出しの真下に挿入
 
-選択範囲があれば画像も一緒に送るので、図を選んで「これの面積はどう求めるの?」と
-口で聞ける (`voiceIncludesSelection` で無効化可)。
+新しく書かれたものがあれば画像も一緒に送るので、図を描いて「これの面積はどう求めるの?」と
+口で聞ける (`voiceIncludesWriting` で無効化可)。
 
 文字起こしエンジンは環境に合わせて選べる:
 
@@ -227,7 +230,7 @@ Claude の応答に次のディレクティブを書くと、その位置に図�
 `| amp=8` の形にも書ける (モデルがどちらで書くか定まらないため両方受ける)。
 
 - `ink` の座標は **Claude に送ったキャプチャ画像のピクセル座標系**。`ink-overlay` は
-  その座標をページ座標に逆変換して元の選択範囲に重ねるので、**子が描いた図の上に
+  その座標をページ座標に逆変換して元の位置に重ねるので、**子が描いた図の上に
   赤ペンで補助線を引く**ような添削ができる (実測誤差 0.5pt 未満)
 - `ink` の連続行はまとめて 1 つの `one:InkDrawing` になる。挿入されるのは本物の
   インクなので、あとからペンや消しゴムで普通に編集できる
@@ -265,7 +268,7 @@ OneNote のセクション名にワイルドカードでマッチさせ、一致
 | `nodePath` | node のパス。`null` なら PATH から |
 | `promptTemplate` | 新規会話の最初のプロンプト (行の配列)。`{image}` `{textSection}` が置換される |
 | `resumePromptTemplate` | 会話継続時の短いプロンプト。文脈はセッション側にある前提 |
-| `textOnlyPromptTemplate` | テキストのみ選択時のプロンプト。`{text}` が置換される |
+| `textOnlyPromptTemplate` | 手書きが無くテキストだけのときのプロンプト。`{text}` が置換される |
 
 ## 会話セッションの仕組み
 
@@ -288,7 +291,8 @@ OneNote のセクション名にワイルドカードでマッチさせ、一致
 ## 動作検証コマンド
 
 ```powershell
-ClaudeNote.exe --capture-test               # いま OneNote で選択中の内容を PNG 化のみ (挿入なし)
+ClaudeNote.exe --capture-test               # 前回から書かれたぶんを PNG 化のみ (挿入なし)
+ClaudeNote.exe --diff-test                  # 差分の検出を対話で試す (Enter = 送るボタン相当)
 ClaudeNote.exe --render-test <xml> <png>    # 保存済みページ XML の全 ink を PNG 化
 ClaudeNote.exe --ask-test <png> [sessionId] # PNG を Claude に送って応答を表示のみ (sessionId 指定で resume 検証)
 ClaudeNote.exe --insert-test                # テストページ作成→挿入→検証→削除
@@ -298,7 +302,6 @@ ClaudeNote.exe --record-test [秒]           # 録音して文字起こしまで
 ClaudeNote.exe --stt-test <wav> [engine]    # 既存の WAV を文字起こし (engine 指定で比較できる)
 ClaudeNote.exe --voice-insert-test          # 吹き出し → 回答の2段階挿入を検証
 ClaudeNote.exe --multipart-test             # テキスト+画像が混ざった応答が重ならないか検証
-ClaudeNote.exe --selection-test <xml>       # 保存済みページ XML に対して選択判定だけ実行
 ClaudeNote.exe --cancel-test                # 実行→キャンセル→続けて次を実行、が通るか検証
 ```
 
@@ -320,7 +323,7 @@ ClaudeNote.exe --cancel-test                # 実行→キャンセル→続け�
                既定はシェル実行込み。additionalDirectories=addDirs で cwd 外の資料も読める)
             → 応答を解析し、テキストは one:Outline、{{image:}} は one:Image、
                {{ink:}} は折れ線→ISF 変換して one:InkDrawing として
-               選択範囲の真下に UpdatePageContent で挿入
+               ページ下端に UpdatePageContent で挿入
 ```
 
 サイドカー (`sidecar/index.mjs`) は stdin/stdout の JSON Lines で C# 側と通信する常駐
@@ -339,39 +342,53 @@ Node プロセス。Claude Agent SDK の `query()` に `resume` / `additionalDir
 - 手書きはストローク断片ごとに `one:InkDrawing` として保存されており、
   各要素の `one:Position`/`one:Size` (pt) で再配置して合成する
 
-## 選択インクの取得方法 (速度)
+## 送る範囲の決め方 (差分)
 
-OneNote の `GetPageContent` で ISF を取ると、**選択が何本でもページ全体を
-シリアライズする**ため、手書きの多いページでは極端に遅くなる:
+範囲選択はさせない。**前回送ったときからページがどう変わったか**を見て、
+増えたぶんだけを送る。
 
-| ページ全体の手書き | COM 経由 |
+OneNote のページ XML は、手書きのストローク (`one:InkDrawing`) ごと・段落
+(`one:OE`) ごとに **`objectID` と `lastModifiedTime`** を持つ。前回の姿を
+objectID → 指紋 (手書きは位置と大きさ、段落は本文のハッシュ) で覚えておき、
+突き合わせれば増えたものが分かる。画像処理は要らない。
+
+```
+1. 軽い XML (バイナリ抜き) を取得してスナップショットを作る
+2. 保存してある基準と突き合わせ、増えた / 変わった objectID を出す
+3. その objectID のぶんだけ ISF 込みで取り出して PNG 化
+4. 応答を挿入したあと、改めてスナップショットを取り直して基準を更新
+```
+
+4 が重要で、**Claude 自身が書いた応答や赤ペンの添削を基準に含める**ことで、
+次に送るときの差分から外れる。
+
+基準はページごとに `%LOCALAPPDATA%\ClaudeNote\baselines.json` に置く
+(手編集する `sessions.json` に数百個の objectID を混ぜないため。50 ページ分まで保持)。
+
+画素を比べる方法もあるが、こちらのほうが:
+
+- 表示の拡大率やスクロール位置に影響されない
+- 座標が pt 単位で得られ、そのまま `ink-overlay` の座標系になる
+- 前に書いたものと重なる位置に書いても正しく分離できる
+- 軽い (191 ストロークのページで 42KB の XML)
+
+実測 (手書き 91 → 181 ストロークのページ):
+
+| | |
 |---|---|
-| 453 本 | 約 16 秒 |
-| 6,493 本 | **約 109 秒** |
+| 併合 (objectID 据え置きで矩形だけ拡大) | 7 回の書き込みで 0 回。ストロークは毎回新しい objectID で足される |
+| 取得と突き合わせ | `--bench-capture` で段階ごとに計測できる |
 
-そこで既定では、OneNote に**選択範囲をコピーさせてクリップボードから ISF を
-受け取る**。選択したぶんだけで済むのでページの大きさに影響されない。
+**基準が無いページ** (初めて送る、または会話をリセットした直後) では、
+ページにあるものすべてが「新しく書かれたもの」になる。
 
-実測 (6,493 本のページで 1,280 本を選択):
-
-```
-コピー経由: 選択判定 1.3s + コピー 2.7〜8.5s + 描画 0.4s  ≒ 4〜10 秒
-COM 経由 : 選択判定 1.3s + 取得 108.7s + 描画 0.2s        ≒ 110 秒
-```
-
-生成される画像は両者で完全に同一。仕組み上の注意:
-
-- 一時的に**クリップボードを使う** (元の内容は失われる)
-- OneNote が前面でないときは前面に出す (選択やスクロールは変えない)
-- 取得できなければ自動で COM 経由に退避する
-- 画像を含む選択は COM 経由 (クリップボードからは ISF のみ取得)
-
-`useClipboardCapture: false` で従来どおり COM 経由にできる。
+切り貼りで移動させたものは objectID が変わるため、差分では「新しく書かれた」
+扱いになる (1 回だけ広めに送られる)。
 
 ## 回答の横幅
 
 応答テキストの横幅は既定で **全角 35 文字** (`responseWidthChars`) に固定する。
-以前は選択範囲の幅をそのまま使っていたため、選んだ範囲の大きさで 1 行の長さが
+以前は送る範囲の幅をそのまま使っていたため、書いた大きさで 1 行の長さが
 変わって読みにくかった。
 
 幅は `responseWidthChars × responseCharWidthPt` (pt) で決まる。全角文字は
@@ -385,7 +402,7 @@ COM 経由 : 選択判定 1.3s + 取得 108.7s + 描画 0.2s        ≒ 110 秒
 
 既定 (`insertPosition: "belowAll"`) では、
 
-- **x** は選択していた内容の左端に揃える (話の流れが縦に並ぶ)
+- **x** は今回書かれた内容の左端に揃える (話の流れが縦に並ぶ)
 - **y** はページ上の全要素の下端、つまり**まだ何も書かれていない空白部分**
 
 とするため、既存の手書きや図と重なることが原理的に起きない。音声入力の吹き出しと
@@ -395,7 +412,7 @@ COM 経由 : 選択判定 1.3s + 取得 108.7s + 描画 0.2s        ≒ 110 秒
 測り直す**。テキストの高さは折り返しによって変わり事前に見積もれないため、
 まとめて挿入すると 2 つ目以降が少し上にずれて重なってしまう。
 
-選択範囲の真下に置きたい場合は `insertPosition` を `belowSelection` にする
+書いた部分の真下に置きたい場合は `insertPosition` を `belowWriting` にする
 (ノートが長いと回答が画面外になるのを避けたいとき向け。ただしこの場合は実測できず
 見積もりで一括挿入するため、重なる可能性がある)。
 
@@ -403,5 +420,5 @@ COM 経由 : 選択判定 1.3s + 取得 108.7s + 描画 0.2s        ≒ 110 秒
 
 - アウトライン内に変換された手書きテキスト (InkWord) は位置情報を持たないため、
   キャプチャ画像の末尾にまとめて描画される (通常の自由手書きは影響なし)
-- ノートが長い場合、回答はページ末尾に入るため選択範囲から離れた位置になる
+- ノートが長い場合、回答はページ末尾に入るため書いた場所から離れた位置になる
 - 挿入されるのはプレーンテキストのみ (数式レンダリングなどはなし)

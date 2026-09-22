@@ -15,7 +15,7 @@ public sealed record ImagePart(string Path, double? WidthPt) : ResponsePart;
 
 /// <summary>
 /// インク描画。座標はキャプチャ画像のピクセル座標系。
-/// Overlay=true なら選択範囲に重ねて描く (補助線)。false なら応答の流れの中に置く。
+/// Overlay=true なら送った範囲に重ねて描く (補助線)。false なら応答の流れの中に置く。
 /// </summary>
 public sealed record InkPart(InkStroke[] Strokes, bool Overlay) : ResponsePart;
 
@@ -24,7 +24,7 @@ public sealed record InkPart(InkStroke[] Strokes, bool Overlay) : ResponsePart;
 ///
 ///   {{image: C:\path\to\figure.png}}          … 画像を挿入 (width=200 で pt 指定可)
 ///   {{ink: 10,20 40,60 90,20 | color=#D40000 | width=2}}  … 折れ線を1本描く
-///   {{ink-overlay: ...}}                      … 選択範囲に重ねて描く (補助線)
+///   {{ink-overlay: ...}}                      … 送った範囲に重ねて描く (補助線)
 ///   {{ink-overlay: circle 300,400 r=25}}     … 円 (正解の○)
 ///   {{ink-overlay: wave 100,300 260,300}}     … 波線 (怪しい途中式の下線)
 ///   {{ink-overlay: ? 280,290 size=20}}        … 「?」 (波線とセットで使う)

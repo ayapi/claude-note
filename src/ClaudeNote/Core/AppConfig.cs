@@ -103,8 +103,8 @@ public sealed class AppConfig
     public string ResponseColor { get; set; } = "#1F4E79";
 
     /// <summary>
-    /// 応答テキストの横幅 (全角の文字数)。0 以下にすると選択範囲の幅に合わせる
-    /// (従来の挙動。選択の大きさで行長が変わって読みにくい)。
+    /// 応答テキストの横幅 (全角の文字数)。0 以下にすると書かれた部分の幅に合わせる
+    /// (従来の挙動。書いた大きさで行長が変わって読みにくい)。
     /// </summary>
     [JsonPropertyName("responseWidthChars")]
     public int ResponseWidthChars { get; set; } = 35;
@@ -122,19 +122,6 @@ public sealed class AppConfig
         ResponseWidthChars > 0 ? ResponseWidthChars * ResponseCharWidthPt : null;
 
     /// <summary>
-    /// 選択範囲のインクを「OneNote にコピーさせてクリップボードから受け取る」方式で取るか。
-    /// COM から取ると選択が何本でもページ全体をシリアライズするため、手書きの多い
-    /// ページでは 100 秒を超える (実測 6500本で 108 秒 → コピー経由なら 3 秒)。
-    /// 一時的にクリップボードを使うので、無効にすると従来どおり COM から取る。
-    /// </summary>
-    [JsonPropertyName("useClipboardCapture")]
-    public bool UseClipboardCapture { get; set; } = true;
-
-    /// <summary>コピー経由を待つ上限 (ミリ秒)。実測 3〜9 秒なので、これを超えたら COM 経由へ退避する。</summary>
-    [JsonPropertyName("clipboardTimeoutMs")]
-    public int ClipboardTimeoutMs { get; set; } = 12000;
-
-    /// <summary>
     /// Claude に送るキャプチャ画像の背景。"auto" (既定) はインクの明るさから
     /// 白か暗色かを選ぶ。"white" / "black" / "transparent" / "#RRGGBB" も指定可。
     /// 透明にすると、表示側の合成色によっては黒インクが読めなくなる。
@@ -144,14 +131,14 @@ public sealed class AppConfig
 
     /// <summary>
     /// 回答の挿入位置。"belowAll" (既定) はページ全体の下端 (空白部分) に置くため
-    /// 既存の内容と重ならない。"belowSelection" は選択範囲の真下に置く。
-    /// x 座標はどちらも選択範囲の左端に揃える。
+    /// 既存の内容と重ならない。"belowWriting" は今回書かれた部分の真下に置く。
+    /// x 座標はどちらも書かれた部分の左端に揃える。
     /// </summary>
     [JsonPropertyName("insertPosition")]
     public string InsertPosition { get; set; } = "belowAll";
 
     public bool InsertBelowAll =>
-        !InsertPosition.Equals("belowSelection", StringComparison.OrdinalIgnoreCase);
+        !InsertPosition.Equals("belowWriting", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>キャプチャ PNG と応答を残すか。</summary>
     [JsonPropertyName("keepArtifacts")]
@@ -218,7 +205,7 @@ public sealed class AppConfig
     [JsonPropertyName("textOnlyPromptTemplate")]
     public string[] TextOnlyPromptTemplate { get; set; } =
     [
-        "以下は OneNote 上で選択されたテキストです。日本語で簡潔に応答してください。出力はプレーンテキストのみ。",
+        "以下は OneNote に新しく書かれたテキストです。日本語で簡潔に応答してください。出力はプレーンテキストのみ。",
         "---",
         "{text}",
         "---",
@@ -378,9 +365,9 @@ public sealed class AppConfig
     [JsonPropertyName("voiceColor")]
     public string VoiceColor { get; set; } = "#6B7280";
 
-    /// <summary>音声入力に選択範囲のキャプチャ画像も添えるか。</summary>
-    [JsonPropertyName("voiceIncludesSelection")]
-    public bool VoiceIncludesSelection { get; set; } = true;
+    /// <summary>音声入力に、前回から新しく書かれた部分も添えるか。</summary>
+    [JsonPropertyName("voiceIncludesWriting")]
+    public bool VoiceIncludesWriting { get; set; } = true;
 
     /// <summary>音声入力時のプロンプト。{voice} に文字起こし、{image} に画像パスが入る。</summary>
     [JsonPropertyName("voicePromptTemplate")]
@@ -390,7 +377,7 @@ public sealed class AppConfig
         "---",
         "{voice}",
         "---",
-        "{voiceSelection}",
+        "{voiceWriting}",
         "この質問に日本語で答えてください。出力はそのまま OneNote に挿入されます。プレーンテキストのみ（マークダウン記法なし）。",
         "{figureGuide}",
     ];
@@ -486,8 +473,6 @@ public sealed class AppConfig
             ResponseWidthChars = ResponseWidthChars,
             ResponseCharWidthPt = ResponseCharWidthPt,
             CaptureBackground = CaptureBackground,
-            UseClipboardCapture = UseClipboardCapture,
-            ClipboardTimeoutMs = ClipboardTimeoutMs,
             InsertPosition = InsertPosition,
             KeepArtifacts = KeepArtifacts,
             SessionScope = profile.SessionScope ?? SessionScope,
@@ -517,7 +502,7 @@ public sealed class AppConfig
             OpenAiSttModel = OpenAiSttModel,
             VoicePrefix = VoicePrefix,
             VoiceColor = VoiceColor,
-            VoiceIncludesSelection = VoiceIncludesSelection,
+            VoiceIncludesWriting = VoiceIncludesWriting,
             VoicePromptTemplate = profile.VoicePromptTemplate ?? VoicePromptTemplate,
             AllowedTools = profile.AllowedTools ?? AllowedTools,
             AddDirs = profile.AddDirs ?? AddDirs,

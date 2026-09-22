@@ -53,26 +53,26 @@ public sealed class AskFlow
             throw new UserFacingException("音声を認識できませんでした。もう一度お試しください。");
         ct.ThrowIfCancellationRequested();
 
-        // 選択範囲があれば一緒に送る (「この図の面積は?」のような使い方)
-        var pageXml = onenote.GetPageXmlSelectionOnly(pageId);
-        var sel = PageXml.ParseSelection(pageXml);
+        // 前回から書き足されたぶんを一緒に送る (「これで合ってる?」のような使い方)
+        var capture = cfg.VoiceIncludesWriting
+            ? CaptureNewWriting(onenote, pageId, cfg, onProgress)
+            : null;
+        var sel = capture?.Selection ?? new Selection { PageId = pageId };
         RenderResult? render = null;
-        if (cfg.VoiceIncludesSelection && sel.HasVisual)
+        if (capture is { IsEmpty: false } && sel.HasRenderableData)
         {
-            // 描画に必要なときだけインクの実体を取りに行く
-            sel = LoadVisualData(onenote, pageId, sel, cfg, onProgress);
             render = SelectionRenderer.RenderToPng(sel, Path.Combine(dir, "capture.png"), cfg.CaptureBackground);
             if (render != null)
-                Logger.Log($"音声入力に選択範囲を添付: {render.WidthPx}x{render.HeightPx}px");
+                Logger.Log($"音声入力に書いた内容を添付: {render.WidthPx}x{render.HeightPx}px");
         }
         else
         {
-            Logger.Log($"音声入力: 添付する選択範囲なし (ink={sel.Ink.Count} img={sel.Images.Count} " +
-                $"textLen={sel.Text.Length} 添付設定={cfg.VoiceIncludesSelection} / OneNoteの報告: {sel.Diagnostics})");
+            Logger.Log($"音声入力: 添付する書き込みなし (添付設定={cfg.VoiceIncludesWriting}, " +
+                $"差分={capture?.ChangeCount ?? 0} 個)");
         }
 
         // 1 段階目: 文字起こしを吹き出しとして先に入れる
-        var anchor = PageXml.ComputeInsertAnchor(pageXml, sel, cfg.InsertBelowAll);
+        var anchor = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, cfg.InsertBelowAll);
         var bubble = cfg.VoicePrefix + voiceText;
         onenote.UpdatePage(PageXml.BuildResponseXml(pageId, anchor, [new TextPart(bubble)], cfg.VoiceColor, null, cfg.ResponseWidthPt));
         onProgress?.Invoke("文字起こしを挿入しました。回答を待っています…");
@@ -83,20 +83,20 @@ public sealed class AskFlow
         var resumeId = string.IsNullOrWhiteSpace(entry?.SessionId) ? null : entry!.SessionId;
         var runCwd = entry?.Cwd is { Length: > 0 } cwd && Directory.Exists(cwd) ? cwd : workspace;
 
-        // 選択されていたものを必ず添える。テキスト選択が落ちていて
+        // 書かれたものを必ず添える。テキストが落ちていて
         // 「本文が空で届いていない」と言われる不具合があった
-        var selectionParts = new List<string>();
+        var writingParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(sel.Text))
-            selectionParts.Add($"ノート上で選択されていたテキスト:\n---\n{sel.Text}\n---");
+            writingParts.Add($"前回から新しく書かれたテキスト:\n---\n{sel.Text}\n---");
         if (render != null)
-            selectionParts.Add($"あわせて、選択範囲の画像を送ります。まず {render.PngPath} を Read ツールで読み取ってから答えてください。");
-        var voiceSelection = selectionParts.Count > 0
-            ? string.Join("\n", selectionParts)
-            : "（ノート上では何も選択されていません。発言だけで答えてください）";
-        Logger.Log($"音声入力に添える選択内容: テキスト {sel.Text.Length}文字 / 画像 {(render != null ? "あり" : "なし")}");
+            writingParts.Add($"あわせて、前回から新しく書かれた部分の画像を送ります。まず {render.PngPath} を Read ツールで読み取ってから答えてください。");
+        var voiceWriting = writingParts.Count > 0
+            ? string.Join("\n", writingParts)
+            : "（前回から新しく書かれたものはありません。発言だけで答えてください）";
+        Logger.Log($"音声入力に添える内容: テキスト {sel.Text.Length}文字 / 画像 {(render != null ? "あり" : "なし")}");
         var prompt = cfg.VoicePromptTemplateText
             .Replace("{voice}", voiceText)
-            .Replace("{voiceSelection}", voiceSelection)
+            .Replace("{voiceWriting}", voiceWriting)
             .Replace("{image}", render?.PngPath ?? "")
             .Replace("{figureGuide}", cfg.FigureGuideText);
 
@@ -112,6 +112,9 @@ public sealed class AskFlow
         var parts = ResponseParser.Parse(result.Text);
         InsertParts(onenote, pageId, sel, cfg, parts, render?.Map);
 
+        // 応答を入れ終えてから基準を取り直す (自分が書いたものを次の差分に含めない)
+        CommitBaseline(onenote, pageId);
+
         if (cfg.KeepArtifacts)
         {
             try
@@ -125,58 +128,76 @@ public sealed class AskFlow
         return new AskResult(result.Text, render?.PngPath, dir, outcome.SessionMode, voiceText);
     }
 
+    /// <summary>前回の送信から新しく書かれたぶん。</summary>
+    private sealed record Capture(Selection Selection, PageSnapshot Snapshot, int ChangeCount)
+    {
+        public bool IsEmpty => ChangeCount == 0;
+    }
+
     /// <summary>
-    /// 選択されたインクの実体を用意する。
-    /// 既定ではコピー経由 (選択したぶんだけ取れるので速い) を試し、
-    /// 取れなければ COM 経由 (ページ全体をシリアライズするため遅い) に退避する。
+    /// 前回この ページ へ送ったときからの差分を取り込む。
+    ///
+    /// 手で範囲選択させる代わりに「前回から書き足されたもの」を送る。OneNote の
+    /// ページ XML は手書きのストロークごと・段落ごとに objectID を持っているので、
+    /// 前回の指紋と突き合わせれば増えたぶんだけが分かる。
+    /// 基準はページ単位で保存され、応答を挿入したあとに取り直す
+    /// (Claude 自身が書いた応答や添削を次の差分に含めないため)。
     /// </summary>
-    private static Selection LoadVisualData(OneNoteApp onenote, string pageId, Selection light, AppConfig cfg,
+    private static Capture CaptureNewWriting(OneNoteApp onenote, string pageId, AppConfig cfg,
         Action<string>? onProgress)
     {
-        // 画像が選択に含まれるときはコピー経由ではインクが来ないので、待つだけ無駄
-        var worthIt = cfg.UseClipboardCapture
-            && light.SelectedImageCount == 0
-            && light.SelectedInkCount >= 1;
-        if (cfg.UseClipboardCapture && !worthIt)
-            Logger.Log($"コピー経由を使いません (手書き {light.SelectedInkCount} / 画像 {light.SelectedImageCount})");
+        // まずバイナリ抜きの軽い XML で「何が増えたか」だけ調べる。
+        // インクの多いページでは ISF 込みの取得に数十秒かかるため、必要なときだけ取りに行く
+        var snapshot = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+        var baseline = BaselineStore.Load(pageId);
+        var changes = snapshot.ChangesSince(baseline);
 
-        if (worthIt)
+        if (baseline == null)
+            Logger.Log($"このページの基準がまだ無いので、いまある {changes.Count} 個すべてを送ります");
+
+        if (changes.Count == 0)
         {
-            onProgress?.Invoke("選択範囲を取得しています…");
-            var isf = ClipboardInk.TryCopySelection(cfg.ClipboardTimeoutMs);
-            if (isf != null && light.BoundsPt is Rect rect)
-            {
-                // コピーで得た ISF の外接矩形と、OneNote が報告する選択範囲の矩形が
-                // 相似でないと、引き伸ばしで歪んで重ね書きの座標がずれる。必ず記録する
-                try
-                {
-                    var isfBounds = InkBuilder.GetBounds(isf);
-                    var sx = isfBounds.Width > 0.05 ? rect.Width / isfBounds.Width : 0;
-                    var sy = isfBounds.Height > 0.05 ? rect.Height / isfBounds.Height : 0;
-                    var skew = sy > 0 ? sx / sy : 0;
-                    Logger.Log($"座標対応: ISF={isfBounds.Width:0.#}x{isfBounds.Height:0.#} " +
-                        $"選択範囲={rect.Width:0.#}x{rect.Height:0.#}pt sx={sx:0.####} sy={sy:0.####} 比={skew:0.####}" +
-                        (Math.Abs(skew - 1) > 0.01 ? "  ← 相似でないため重ね書きがずれます" : ""));
-                }
-                catch (Exception ex)
-                {
-                    Logger.Log($"座標対応の確認に失敗: {ex.Message}");
-                }
-
-                // クリップボードの ISF は自前の座標系なので、選択範囲のページ座標へ
-                // 収まるように 1 つの塊として配置する
-                var sel = new Selection { PageId = pageId, Text = light.Text, VisualCount = light.VisualCount };
-                sel.VisualRects.AddRange(light.VisualRects);
-                sel.Ink.Add(new InkItem(isf, rect));
-                sel.BoundsPt = light.BoundsPt;
-                sel.FallbackBoundsPt = light.FallbackBoundsPt;
-                return sel;
-            }
-            Logger.Log("コピー経由で取れなかったため、COM 経由で取得します (時間がかかります)");
+            Logger.Log($"差分なし (ページ上のオブジェクト {snapshot.Objects.Count} 個)");
+            return new Capture(new Selection { PageId = pageId }, snapshot, 0);
         }
 
-        onProgress?.Invoke($"選択範囲を取得しています… (手書き {light.SelectedInkCount} 個、少し時間がかかります)");
-        return PageXml.ParseSelection(onenote.GetPageXml(pageId));
+        var inkCount = changes.Count(c => !c.Object.IsText);
+        var textCount = changes.Count - inkCount;
+        Logger.Log($"差分: 手書き・画像 {inkCount} 個 / 段落 {textCount} 個 " +
+            $"(ページ全体 {snapshot.Objects.Count} 個, 基準 {baseline?.Fingerprints.Count ?? 0} 個)");
+
+        // 描画に使う ISF はバイナリ込みの XML にしか無いので、図があるときだけ取りに行く
+        Selection sel;
+        if (inkCount > 0)
+        {
+            onProgress?.Invoke($"書いた内容を取得しています… (手書き {inkCount} 個)");
+            var ids = changes.Select(c => c.Object.ObjectId).ToHashSet();
+            sel = PageSnapshot.BuildSelection(onenote.GetPageXml(pageId), ids);
+        }
+        else
+        {
+            sel = new Selection { PageId = pageId, Text = PageSnapshot.TextOf(changes) };
+        }
+        sel.BoundsPt ??= PageSnapshot.BoundsOf(changes);
+        return new Capture(sel, snapshot, changes.Count);
+    }
+
+    /// <summary>
+    /// 送信後の姿を基準として残す。応答や添削を入れ終わったあとに呼ぶこと。
+    /// ここで取り直さないと、Claude が書いたものが次の差分に混ざる。
+    /// </summary>
+    private static void CommitBaseline(OneNoteApp onenote, string pageId)
+    {
+        try
+        {
+            var after = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+            BaselineStore.Save(after.ToBaseline());
+            Logger.Log($"基準を更新しました: {after.Objects.Count} 個");
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"基準の更新に失敗しました (次回の差分が広くなります): {ex.Message}");
+        }
     }
 
     private AppConfig ResolveConfig(OneNoteApp onenote, string sectionId)
@@ -295,18 +316,13 @@ public sealed class AskFlow
             Logger.Log($"セクション '{sectionName}' → プロファイル {matched}");
         }
 
-        // まずバイナリ抜きの軽い XML で「何が選ばれているか」だけ調べる。
-        // インクの多いページでは ISF 込みの取得に数十秒かかり、その間 OneNote を
-        // 掴み続けることになるため、必要なときだけ取りに行く
-        var sel = PageXml.ParseSelection(onenote.GetPageXmlSelectionOnly(pageId));
-        if (sel.IsEmpty)
+        var capture = CaptureNewWriting(onenote, pageId, cfg, onProgress);
+        if (capture.IsEmpty)
         {
-            Logger.Log($"選択なし (OneNoteの報告: {sel.Diagnostics})");
-            throw new UserFacingException("OneNote 上で何も選択されていません。なげなわ選択やドラッグで範囲を選んでから実行してください。");
+            throw new UserFacingException(
+                "前回送ってから、まだ何も書かれていません。ノートに書いてから実行してください。");
         }
-        Logger.Log($"選択: 図={sel.VisualCount} textLen={sel.Text.Length} (OneNoteの報告: {sel.Diagnostics})");
-        if (sel.HasVisual)
-            sel = LoadVisualData(onenote, pageId, sel, cfg, onProgress);
+        var sel = capture.Selection;
 
         var workspace = ResolveWorkspace(cfg);
         var dir = Path.Combine(workspace, "captures", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
@@ -339,6 +355,9 @@ public sealed class AskFlow
         var figures = parts.Count(p => p is ImagePart or InkPart);
         if (figures > 0) Logger.Log($"応答に図が {figures} 個含まれています");
         InsertParts(onenote, pageId, sel, cfg, parts, render?.Map);
+
+        // 応答を入れ終えてから基準を取り直す (自分が書いたものを次の差分に含めない)
+        CommitBaseline(onenote, pageId);
 
         if (cfg.KeepArtifacts)
         {
@@ -389,7 +408,7 @@ public sealed class AskFlow
             return;
         }
 
-        // 選択範囲の真下に置く場合は実測できないので、従来どおり見積もりで一括挿入する
+        // 書いた部分の真下に置く場合は実測できないので、従来どおり見積もりで一括挿入する
         var fallback = PageXml.ComputeInsertAnchor(onenote.GetPageXmlBasic(pageId), sel, belowAll: false);
         Logger.Log($"挿入位置: x={fallback.X:0.#} y={fallback.Bottom:0.#} (belowSelection、一括)");
         onenote.UpdatePage(PageXml.BuildResponseXml(pageId, fallback, [.. flow], cfg.ResponseColor, map, cfg.ResponseWidthPt));
@@ -470,7 +489,7 @@ public sealed class AskFlow
         {
             var textSection = string.IsNullOrWhiteSpace(sel.Text)
                 ? ""
-                : $"\n選択範囲に含まれていたテキスト:\n---\n{sel.Text}\n---";
+                : $"\n新しく書かれたテキスト:\n---\n{sel.Text}\n---";
             var template = resumed ? cfg.ResumePromptTemplateText : cfg.PromptTemplateText;
             Logger.Log($"使用プロンプト: {(resumed ? "resumePromptTemplate" : "promptTemplate")} ({template.Length}文字)");
             return template
@@ -486,6 +505,6 @@ public sealed class AskFlow
                 .Replace("{text}", sel.Text);
         }
 
-        throw new UserFacingException("選択範囲から読み取れる内容がありませんでした。");
+        throw new UserFacingException("書かれた内容から読み取れるものがありませんでした。");
     }
 }

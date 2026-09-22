@@ -54,7 +54,10 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add("会話セッションをリセット", null, (_, _) =>
         {
             SessionStore.ResetAll();
-            _icon.ShowBalloonTip(2000, "ClaudeNote", "会話セッションの対応をリセットしました。次回は新規会話から始まります。", ToolTipIcon.Info);
+            // 基準も一緒に捨てる。会話だけ新しくして基準が残っていると、
+            // 新しい会話の初回に「何も書かれていません」で弾かれてしまう
+            BaselineStore.ResetAll();
+            _icon.ShowBalloonTip(2000, "ClaudeNote", "会話と書き込みの基準をリセットしました。次回はページにあるものをすべて送ります。", ToolTipIcon.Info);
         });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("更新を確認して適用", null, (_, _) => CheckForUpdate());
@@ -93,7 +96,7 @@ public sealed class TrayContext : ApplicationContext
 
         Logger.Log($"起動しました。ホットキー: {config.Hotkey}");
         _icon.ShowBalloonTip(2000, "ClaudeNote",
-            $"常駐を開始しました。OneNote で範囲を選択して {config.Hotkey} を押してください。", ToolTipIcon.Info);
+            $"常駐を開始しました。OneNote に書いてから {config.Hotkey} を押してください。", ToolTipIcon.Info);
     }
 
     /// <summary>
@@ -267,7 +270,7 @@ public sealed class TrayContext : ApplicationContext
         RefreshConfig();
         await RunAsync(
             flow: (onProgress, ct) => _flow.RunAsync(onProgress, ct),
-            startMessage: "受け付けました。選択内容をキャプチャして Claude に送ります…");
+            startMessage: "受け付けました。書いた内容をキャプチャして Claude に送ります…");
     }
 
     /// <summary>

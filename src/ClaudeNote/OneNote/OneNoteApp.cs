@@ -138,7 +138,7 @@ public sealed class OneNoteApp : IDisposable
         }
     }
 
-    /// <summary>選択マーカーとバイナリ (ink ISF / 画像) 込みのページ XML を取得。</summary>
+    /// <summary>バイナリ (ink ISF / 画像) 込みのページ XML を取得。</summary>
     public string GetPageXml(string pageId)
     {
         // PageInfo.piBinaryDataSelection = 3
@@ -155,12 +155,6 @@ public sealed class OneNoteApp : IDisposable
     /// 位置とサイズは入っているので、挿入位置の計算だけならこちらで足りる。
     /// </summary>
     public string GetPageXmlBasic(string pageId) => GetPageXmlWith(pageId, 0);
-
-    /// <summary>
-    /// 選択マーカー付き・バイナリ無しのページ XML。
-    /// 「何が選ばれているか」を調べるだけならこれで足り、巨大なページでも速い。
-    /// </summary>
-    public string GetPageXmlSelectionOnly(string pageId) => GetPageXmlWith(pageId, 2);
 
     private string GetPageXmlWith(string pageId, int pageInfoValue)
     {

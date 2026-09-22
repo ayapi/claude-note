@@ -23,31 +23,28 @@ public sealed class Selection
     public List<ImageItem> Images { get; } = [];
 
     /// <summary>
-    /// 選択された図の数。バイナリ抜きの XML で中身が取れない場合でも数える。
-    /// 「図が選ばれているか」の判定はこちらを使うこと (Ink.Count で判定すると、
-    /// 軽い XML では常に 0 になり選択を見落とす)。
+    /// 送る対象の図の数。バイナリ抜きの XML で中身が取れない場合でも数える。
+    /// 「図が含まれるか」の判定はこちらを使うこと (Ink.Count で判定すると、
+    /// 軽い XML では常に 0 になり見落とす)。
     /// </summary>
     public int VisualCount;
 
-    /// <summary>選択された手書き (InkDrawing / InkWord) の数。</summary>
+    /// <summary>送る手書き (InkDrawing / InkWord) の数。</summary>
     public int SelectedInkCount;
 
-    /// <summary>選択された画像の数。画像はコピー経由では取れないので経路の判断に使う。</summary>
+    /// <summary>送る画像の数。</summary>
     public int SelectedImageCount;
 
-    /// <summary>選択された図の位置 (バイナリの有無に関わらず)。</summary>
+    /// <summary>送る図の位置 (バイナリの有無に関わらず)。</summary>
     public List<Rect> VisualRects { get; } = [];
 
     public string Text = "";
 
-    /// <summary>選択範囲全体の外接矩形 (pt、ページ座標)。位置情報が一切取れなければ null。</summary>
+    /// <summary>送る範囲全体の外接矩形 (pt、ページ座標)。位置情報が一切取れなければ null。</summary>
     public Rect? BoundsPt;
 
     /// <summary>ページ内の全要素の下端など、挿入位置のフォールバック (pt)。</summary>
     public Rect? FallbackBoundsPt;
-
-    /// <summary>OneNote が何を選択中と報告してきたかの要約 (原因調査用)。</summary>
-    public string Diagnostics = "";
 
     public bool IsEmpty => VisualCount == 0 && string.IsNullOrWhiteSpace(Text);
     public bool HasVisual => VisualCount > 0;
@@ -62,12 +59,8 @@ public static class PageXml
 
     private static readonly Regex TagPattern = new("<[^>]+>", RegexOptions.Compiled);
 
-    public static Selection ParseSelection(string pageXml) => Parse(pageXml, selectedOnly: true);
-
-    /// <summary>デバッグ用: ページ内の全 ink / 画像を選択扱いで取り出す。</summary>
-    public static Selection ParseAll(string pageXml) => Parse(pageXml, selectedOnly: false);
-
-    private static Selection Parse(string pageXml, bool selectedOnly)
+    /// <summary>ページ内の全 ink / 画像 / テキストを取り出す。</summary>
+    public static Selection ParseAll(string pageXml)
     {
         var doc = XDocument.Parse(pageXml);
         var page = doc.Root ?? throw new UserFacingException("ページ XML を解析できませんでした。");
@@ -80,20 +73,14 @@ public static class PageXml
             if (el.Ancestors(One + "Title").Any()) continue;
 
             var name = el.Name.LocalName;
-            // selected="all" は「配下すべてが選択」を意味するので子孫へ波及させる。
-            // selected="partial" は「配下の一部が選択」なので波及させない。
-            // (ページ上にカーソルがあるだけで Page が partial になるため、
-            //  波及させるとページ全体が選択扱いになってしまう)
-            var isSelected = !selectedOnly || IsSelected(el) || el.Ancestors().Any(IsSelectedAll);
 
             switch (name)
             {
                 case "InkDrawing":
                 case "InkWord":
                 {
-                    if (!isSelected) break;
                     // バイナリ抜きの XML では Data が無い。それでも「選ばれている」事実は
-                    // 数えておかないと、図の選択を見落とす
+                    // 数えておかないと、図を見落とす
                     sel.VisualCount++;
                     sel.SelectedInkCount++;
                     var rect = ReadRect(el);
@@ -105,7 +92,6 @@ public static class PageXml
 
                 case "Image":
                 {
-                    if (!isSelected) break;
                     sel.VisualCount++;
                     sel.SelectedImageCount++;
                     var rect = ReadRect(el);
@@ -116,7 +102,6 @@ public static class PageXml
                 }
 
                 case "T":
-                    if (!isSelected) break;
                     var text = WebUtility.HtmlDecode(TagPattern.Replace(el.Value, ""));
                     if (!string.IsNullOrWhiteSpace(text)) textParts.Add(text.Trim());
                     break;
@@ -124,38 +109,10 @@ public static class PageXml
         }
 
         sel.Text = string.Join("\n", textParts);
-        sel.BoundsPt = ComputeSelectionBounds(sel, page, selectedOnly);
+        sel.BoundsPt = ComputeSelectionBounds(sel, page);
         sel.FallbackBoundsPt = ComputePageContentBounds(page);
-        sel.Diagnostics = Describe(page);
         return sel;
     }
-
-    /// <summary>
-    /// OneNote が selected 属性をどう付けてきたかを要約する。
-    /// 「選択したのに届かない」ときに、選択が消えていたのか、
-    /// 想定と違う付き方をしているのかを切り分けるために使う。
-    /// </summary>
-    private static string Describe(XElement page)
-    {
-        var groups = page.DescendantsAndSelf()
-            .Select(el => (Tag: el.Name.LocalName, Sel: (string?)el.Attribute("selected")))
-            .Where(x => x.Sel is "all" or "partial")
-            .GroupBy(x => $"{x.Tag}={x.Sel}")
-            .OrderByDescending(g => g.Count())
-            .Select(g => $"{g.Key}×{g.Count()}")
-            .ToArray();
-        return groups.Length > 0 ? string.Join(" ", groups) : "選択マーカーなし";
-    }
-
-    /// <summary>この要素自体が選択に含まれるか (一部選択も含む)。</summary>
-    private static bool IsSelected(XElement el)
-    {
-        var s = (string?)el.Attribute("selected");
-        return s is "all" or "partial";
-    }
-
-    /// <summary>配下すべてが選択されているか。子孫へ選択を波及させてよいのはこの場合だけ。</summary>
-    private static bool IsSelectedAll(XElement el) => (string?)el.Attribute("selected") == "all";
 
     private static byte[]? ReadData(XElement el)
     {
@@ -178,7 +135,7 @@ public static class PageXml
     private static bool TryAttr(XElement el, string name, out double value) =>
         double.TryParse((string?)el.Attribute(name), NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
-    private static Rect? ComputeSelectionBounds(Selection sel, XElement page, bool selectedOnly)
+    private static Rect? ComputeSelectionBounds(Selection sel, XElement page)
     {
         Rect? bounds = null;
 
@@ -187,14 +144,9 @@ public static class PageXml
             bounds = bounds is Rect b ? Rect.Union(b, rect) : rect;
         if (bounds != null) return bounds;
 
-        // ink/画像に位置が無い、またはテキストのみの選択: 選択要素を含む Outline の矩形を使う
+        // ink/画像に位置が無い、テキストだけのとき: アウトラインの矩形を使う
         foreach (var outline in page.Elements(One + "Outline"))
         {
-            // partial なアウトラインは、実際に選択された子孫を持つ場合だけ対象にする
-            var contains = !selectedOnly
-                || IsSelectedAll(outline)
-                || outline.Descendants().Any(IsSelected);
-            if (!contains) continue;
             if (ReadRect(outline) is Rect r)
                 bounds = bounds is Rect b ? Rect.Union(b, r) : r;
         }
@@ -213,20 +165,20 @@ public static class PageXml
         return bounds;
     }
 
-    /// <summary>応答テキストを選択範囲の真下に挿入するための UpdatePageContent 用 XML を組み立てる。</summary>
+    /// <summary>応答テキストを送った範囲の真下に挿入するための UpdatePageContent 用 XML を組み立てる。</summary>
     public static string BuildResponseXml(string pageId, Rect anchorPt, string responseText, string colorHex) =>
         BuildResponseXml(pageId, anchorPt, [new TextPart(responseText)], colorHex, null);
 
     /// <summary>
-    /// テキスト・画像・インクが混在した応答を、選択範囲の真下に配置する XML を組み立てる。
-    /// ink-overlay は選択範囲そのものに重ねる (補助線)。
+    /// テキスト・画像・インクが混在した応答を、送った範囲の真下に配置する XML を組み立てる。
+    /// ink-overlay は送った範囲そのものに重ねる (補助線)。
     /// </summary>
     /// <param name="captureMap">
     /// キャプチャ画像のピクセル座標 → ページ座標 (pt) の変換。インク指定に使う。null ならインクは無視。
     /// </param>
     /// <param name="widthPt">
-    /// テキストの横幅 (pt)。null なら選択範囲の幅に合わせる。
-    /// 選択の大きさで行長が変わると読みにくいので、通常は設定から一定幅を渡す。
+    /// テキストの横幅 (pt)。null なら送った範囲の幅に合わせる。
+    /// 書いた大きさで行長が変わると読みにくいので、通常は設定から一定幅を渡す。
     /// </param>
     public static string BuildResponseXml(string pageId, Rect anchorPt, IReadOnlyList<ResponsePart> parts,
         string colorHex, CaptureMap? captureMap, double? widthPt = null)
@@ -321,7 +273,7 @@ public static class PageXml
     }
 
     /// <summary>
-    /// 回答の挿入位置を決める。x は選択範囲の左端に揃え、y はページ全体の下端
+    /// 回答の挿入位置を決める。x は送った範囲の左端に揃え、y はページ全体の下端
     /// (空白部分) にすることで、既存の内容と重ならないようにする。
     /// </summary>
     public static Rect ComputeInsertAnchor(string pageXml, Selection sel, bool belowAll)
@@ -330,7 +282,7 @@ public static class PageXml
         if (!belowAll) return selRect;
 
         var contentBottom = ComputeContentBottom(pageXml);
-        // 選択範囲より上には置かない (空のページや位置が取れない場合の保険)
+        // 送った範囲より上には置かない (空のページや位置が取れない場合の保険)
         var y = contentBottom is double b && b > selRect.Bottom ? b : selRect.Bottom;
         // 高さ 0 の矩形にして、下端 = 挿入の基準線とする
         return new Rect(selRect.X, y, selRect.Width, 0);
@@ -438,7 +390,7 @@ public static class PageXml
             double posX, posY;
             if (overlayOrigin)
             {
-                // 補助線: キャプチャ画像上の座標をそのまま元の選択範囲の位置へ戻す
+                // 補助線: キャプチャ画像上の座標をそのまま元の位置へ戻す
                 posX = map.OriginXPt + (boundsPx.X - map.PadPx) / map.PxPerPt;
                 posY = map.OriginYPt + (boundsPx.Y - map.PadPx) / map.PxPerPt;
                 // ずれの原因を後から追えるよう、計算過程をすべて残す
