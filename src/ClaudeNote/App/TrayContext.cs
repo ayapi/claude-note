@@ -67,7 +67,10 @@ public sealed class TrayContext : ApplicationContext
         {
             _floatButton = new FloatButtonForm(Math.Max(config.FloatButtonSize, 32), () => OnHotkey(),
                 config.VoiceInput ? Math.Max(config.LongPressMs, 150) : 0);
-            _floatButton.LongPressStarted += StartRecording;
+            // 録音は押した瞬間に始める (長押し判定を待つと話し始めが切れる)。
+            // 長押しにならなければ捨てる
+            _floatButton.PressStarted += StartRecording;
+            _floatButton.PressCancelled += DiscardRecording;
             _floatButton.LongPressEnded += StopRecordingAndAsk;
 
             // ボタンは OneNote が前面のときだけ出す。ボタン自身は WS_EX_NOACTIVATE で
@@ -132,11 +135,7 @@ public sealed class TrayContext : ApplicationContext
 
     private void StartRecording()
     {
-        if (_busy)
-        {
-            _icon.ShowBalloonTip(1500, "ClaudeNote", "処理中は録音できません。", ToolTipIcon.Warning);
-            return;
-        }
+        if (_busy || _recorder.IsRecording) return;
         RefreshConfig();
         try
         {
@@ -169,6 +168,22 @@ public sealed class TrayContext : ApplicationContext
         catch (Exception ex)
         {
             _icon.ShowBalloonTip(4000, "ClaudeNote", $"録音を開始できませんでした: {ex.Message}", ToolTipIcon.Error);
+            Logger.Log(ex);
+        }
+    }
+
+    /// <summary>長押しにならずタップで終わったとき。録音は捨てて通常のタップ処理に任せる。</summary>
+    private void DiscardRecording()
+    {
+        _recordLimitTimer?.Stop();
+        try
+        {
+            var rec = _recorder.Stop();
+            _icon.Text = $"ClaudeNote ({_config.Hotkey})";
+            if (rec != null) TryDelete(rec.WavPath);
+        }
+        catch (Exception ex)
+        {
             Logger.Log(ex);
         }
     }

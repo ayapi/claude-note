@@ -41,6 +41,7 @@ public sealed class FloatButtonForm : Form
     private bool _recording;
     private bool _pressed;
     private bool _longPressFired;
+    private bool _pressStartedFired;
     private bool _flashing;
     private bool _flashOk;
     private string _flashMessage = "";
@@ -49,11 +50,22 @@ public sealed class FloatButtonForm : Form
     private float _angle;
     private float _pulse;
 
-    /// <summary>長押しの開始 (録音開始)。設定で音声入力が有効なときだけ呼ばれる。</summary>
+    /// <summary>
+    /// 押下の開始 (録音開始)。長押しになるかまだ分からない時点で呼ぶ。
+    /// マイクは起動に 1 秒近くかかり、長押し判定を待ってから開くと話し始めが
+    /// 切れてしまうため、押した瞬間に開いておく。設定で音声入力が有効で、
+    /// 処理中でないときだけ呼ばれる。
+    /// </summary>
+    public event Action? PressStarted;
+
+    /// <summary>長押しの開始 (表示の切り替え)。PressStarted の後に呼ばれる。</summary>
     public event Action? LongPressStarted;
 
     /// <summary>長押しの終了 (録音停止)。LongPressStarted の後に必ず呼ばれる。</summary>
     public event Action? LongPressEnded;
+
+    /// <summary>長押しにならずタップで終わった (録音を破棄)。PressStarted の後に呼ばれる。</summary>
+    public event Action? PressCancelled;
 
     public FloatButtonForm(int size, Action onTap, int longPressMs = 0)
     {
@@ -184,7 +196,12 @@ public sealed class FloatButtonForm : Form
         _longPressFired = false;
         Logger.Log($"ボタン押下: 入力={source} 長押し={(_longPressEnabled ? "有効" : "無効")} busy={_busy}");
         // 処理中は長押しを受け付けない (タップ = キャンセルのみ)
-        if (!_busy && _longPressEnabled) _longPressTimer.Start();
+        if (!_busy && _longPressEnabled)
+        {
+            _pressStartedFired = true;
+            PressStarted?.Invoke();
+            _longPressTimer.Start();
+        }
     }
 
     /// <summary>押下の終了。長押し中なら録音終了、そうでなければタップ。</summary>
@@ -197,12 +214,18 @@ public sealed class FloatButtonForm : Form
         if (_longPressFired)
         {
             _longPressFired = false;
+            _pressStartedFired = false;
             SetRecording(false);
             Logger.Log("ボタン解放: 長押し終了 (録音停止)");
             LongPressEnded?.Invoke();
             return;
         }
         Logger.Log("ボタン解放: タップ");
+        if (_pressStartedFired)
+        {
+            _pressStartedFired = false;
+            PressCancelled?.Invoke();
+        }
         _onTap();
     }
 

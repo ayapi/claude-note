@@ -255,6 +255,14 @@ public sealed class AppConfig
     public string SttLanguage { get; set; } = "ja";
 
     /// <summary>
+    /// 文字起こしのヒント文 (whisper の --prompt / OpenAI の prompt)。
+    /// null なら言語に合わせた既定文、空文字ならヒントなし。
+    /// よく使う専門用語を含めた自然な文にしておくと、その語が拾われやすくなる。
+    /// </summary>
+    [JsonPropertyName("sttPrompt")]
+    public string? SttPrompt { get; set; }
+
+    /// <summary>
     /// sessionScope が "page" のとき、新しいページで会話を作り直す際に、
     /// 前のページのセッションに申し送りを書かせて引き継ぐか。
     /// 会話が際限なく伸びるのを防ぎつつ、話の流れは保つための仕組み。
@@ -304,9 +312,12 @@ public sealed class AppConfig
     [JsonPropertyName("openaiApiKey")]
     public string? OpenAiApiKey { get; set; }
 
-    /// <summary>OpenAI の文字起こしモデル。アカウントが未対応なら "whisper-1" にする。</summary>
+    /// <summary>
+    /// OpenAI の文字起こしモデル。gpt-4o-transcribe は mini より日本語の取りこぼしが少ない
+    /// (数秒の発話なら料金差は無視できる)。アカウントが未対応なら "whisper-1" にする。
+    /// </summary>
     [JsonPropertyName("openaiSttModel")]
-    public string OpenAiSttModel { get; set; } = "gpt-4o-mini-transcribe";
+    public string OpenAiSttModel { get; set; } = "gpt-4o-transcribe";
 
     /// <summary>設定または環境変数から OpenAI のキーを取り出す。無ければ null。</summary>
     public string? ResolveOpenAiApiKey()
@@ -446,6 +457,7 @@ public sealed class AppConfig
             AudioDevice = AudioDevice,
             SttEngine = SttEngine,
             SttLanguage = SttLanguage,
+            SttPrompt = SttPrompt,
             SessionHandoff = SessionHandoff,
             HandoffSummaryPrompt = profile.HandoffSummaryPrompt ?? HandoffSummaryPrompt,
             HandoffPromptTemplate = profile.HandoffPromptTemplate ?? HandoffPromptTemplate,

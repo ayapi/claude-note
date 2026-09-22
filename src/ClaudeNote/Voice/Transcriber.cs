@@ -27,6 +27,13 @@ public static class Transcriber
         var requested = config.SttEngine.ToLowerInvariant();
         var chain = requested == "auto" ? AutoChain(config) : new[] { requested };
 
+        // 先頭の無音を落とし音量を揃えてから渡す。ここで音声が見つからなければ
+        // どのエンジンでも幻聴めいた結果しか返ってこないので送らない
+        var cleaned = AudioCleaner.Clean(wavPath);
+        if (cleaned.SpeechDuration.TotalSeconds < 0.3)
+            throw new UserFacingException("音声が検出できませんでした。マイクに近づいて、はっきり話してください。");
+        wavPath = cleaned.WavPath;
+
         for (var i = 0; i < chain.Length; i++)
         {
             var engine = chain[i];
@@ -88,6 +95,12 @@ public static class Transcriber
             "-l", config.SttLanguage,
             "--no-prints", "--no-timestamps",
         }) psi.ArgumentList.Add(a);
+        var hint = ResolvePrompt(config);
+        if (hint != null)
+        {
+            psi.ArgumentList.Add("--prompt");
+            psi.ArgumentList.Add(hint);
+        }
 
         using var proc = Process.Start(psi)
             ?? throw new UserFacingException("whisper を起動できませんでした。");
@@ -140,6 +153,11 @@ public static class Transcriber
         form.Add(new StringContent(config.OpenAiSttModel), "model");
         if (!string.IsNullOrWhiteSpace(config.SttLanguage))
             form.Add(new StringContent(config.SttLanguage), "language");
+        // 言語と話題のヒント。短い発話だと language 指定だけでは中国語や英語に
+        // 化けることがあるため、同じ言語の文を先に見せて引き戻す
+        var hint = ResolvePrompt(config);
+        if (hint != null)
+            form.Add(new StringContent(hint, Encoding.UTF8), "prompt");
         form.Add(new StringContent("text"), "response_format");
 
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/audio/transcriptions")
@@ -197,6 +215,20 @@ public static class Transcriber
     }
 
     // ---- 共通 ----
+
+    /// <summary>
+    /// 認識のヒント文。設定があればそれを、無ければ言語に合わせた既定文を使う。
+    /// whisper の --prompt と OpenAI の prompt はどちらも「直前の文脈」として扱われるので、
+    /// 認識してほしい言語・文体で書いた自然な文にする。
+    /// </summary>
+    private static string? ResolvePrompt(AppConfig config)
+    {
+        if (config.SttPrompt != null)
+            return string.IsNullOrWhiteSpace(config.SttPrompt) ? null : config.SttPrompt;
+        return config.SttLanguage.Equals("en", StringComparison.OrdinalIgnoreCase)
+            ? "A student asks a question about their handwritten notes."
+            : "生徒が手書きのノートについて質問しています。この問題の解き方を教えてください。";
+    }
 
     private static readonly Regex BracketNoise = new(@"[\[\(（【](?:BLANK_AUDIO|音楽|拍手|無音)[^\]\)）】]*[\]\)）】]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);

@@ -143,14 +143,27 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 
 | `sttEngine` | 内容 |
 |---|---|
-| `auto` (既定) | `whisperExe` が設定されていれば whisper、無ければ windows |
-| `whisper` | whisper.cpp。高精度だがモデル (`ggml-*.bin`) の配置が必要。`whisperExe` / `whisperModel` を設定する |
+| `auto` (既定) | whisper → openai → windows の順に、使えるものを選ぶ (失敗したら次で試し直す) |
+| `whisper` | whisper.cpp。高精度でローカル完結だがモデル (`ggml-*.bin`) の配置が必要。`whisperExe` / `whisperModel` を設定する |
+| `openai` | OpenAI の文字起こし API (既定 `gpt-4o-transcribe`)。高精度だが `openaiApiKey` (または環境変数 `OPENAI_API_KEY`) と通信が必要で従量課金 |
 | `windows` | Windows 標準の音声認識 (System.Speech)。追加インストール不要で速いが精度は劣る |
 
 実測 (8秒の音声): whisper large-v3-turbo は約 6 秒で高精度、Windows 標準は約 0.7 秒だが
 誤認識が目立つ。短い質問なら whisper の小さめモデル (base / small) でも足りる。
 
-無音や 0.6 秒未満の録音は送信せずに弾く (whisper が無音に対して幻聴を起こすため)。
+録音は**ボタンに触れた瞬間**に始める (長押しの判定を待たない)。マイクは起動に 1 秒近く
+かかるため、判定後に開くと話し始めが切れて「一割合」「開始了」のような結果になる。
+長押しにならずタップで終わった録音は捨てる。
+
+文字起こしの前に `AudioCleaner` で整形する: 先頭のマイク起動待ち (ゼロ詰め) と前後の
+無音を切り落とし、内蔵マイクの小さな音量を持ち上げ (最大 30 倍)、前後に 0.3 秒の無音を
+足す。整形後の音声が 0.3 秒未満なら送らない (どのエンジンも無音に対して幻聴を起こすため)。
+整形前の `voice.wav` と整形後の `voice.clean.wav` は両方 captures フォルダに残る。
+
+さらに `sttPrompt` (既定は「生徒が手書きのノートについて質問しています…」) を
+ヒントとして渡す。短い発話だと `language: ja` だけでは中国語や英語に化けることが
+あり、同じ言語の文を先に見せることで引き戻す。よく出る専門用語を含めておくと
+その語が拾われやすい。
 
 **ペン・タッチ対応**: Windows は既定でペン/タッチの長押しを「右クリック」ジェスチャに
 変換するため、そのままでは左ボタンが押しっぱなしにならず長押しが成立しない。
