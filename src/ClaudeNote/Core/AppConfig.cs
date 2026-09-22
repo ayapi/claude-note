@@ -50,6 +50,37 @@ public sealed class ConfigProfile
     public string[]? HandoffPromptTemplate { get; set; }
 }
 
+/// <summary>
+/// 「更新を確認して適用」のときに一緒に走らせる自前のコマンド。
+/// ClaudeNote 本体とは別のリポジトリ (教材や作業ディレクトリなど) を
+/// 同じ操作で更新できるようにするためのもの。
+/// ClaudeNote 自身に更新が無くても実行される。
+/// </summary>
+public sealed class UpdateHook
+{
+    /// <summary>ダイアログとログに出す名前。省略するとコマンドがそのまま使われる。</summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    /// <summary>PowerShell に渡すコマンド (例: "git pull --ff-only")。</summary>
+    [JsonPropertyName("command")]
+    public string Command { get; set; } = "";
+
+    /// <summary>実行するディレクトリ。環境変数を展開する。</summary>
+    [JsonPropertyName("workingDir")]
+    public string? WorkingDir { get; set; }
+
+    /// <summary>この秒数で打ち切る。</summary>
+    [JsonPropertyName("timeoutSeconds")]
+    public int TimeoutSeconds { get; set; } = 120;
+
+    /// <summary>false にすると設定を消さずに止められる。</summary>
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    public string Label => string.IsNullOrWhiteSpace(Name) ? Command : Name!;
+}
+
 public sealed class AppConfig
 {
     [JsonPropertyName("hotkey")]
@@ -419,6 +450,13 @@ public sealed class AppConfig
     ];
 
     public string SessionTakeoverPromptText => string.Join("\n", SessionTakeoverPromptTemplate);
+
+    /// <summary>
+    /// 「更新を確認して適用」で一緒に走らせるコマンド。上から順に実行する。
+    /// ClaudeNote 本体の更新の有無にかかわらず実行される。
+    /// </summary>
+    [JsonPropertyName("updateHooks")]
+    public UpdateHook[] UpdateHooks { get; set; } = [];
 
     /// <summary>セクション名で切り替える設定プロファイル。上から順に評価し最初の一致を適用。</summary>
     [JsonPropertyName("profiles")]

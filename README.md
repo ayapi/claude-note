@@ -69,6 +69,43 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 未コミットの変更があるリポジトリでは実行しません。コマンドラインからは
 `ClaudeNote.exe --update-check` で確認だけ、`--update-apply` で適用まで行えます。
 
+### 一緒に走らせる自前のコマンド (updateHooks)
+
+`updateHooks` に書いたコマンドが「更新を確認して適用」のたびに実行されます。
+教材リポジトリなど、ClaudeNote 本体とは別に更新したいものを同じ操作で済ませるための
+仕組みです。**ClaudeNote 本体に更新が無くても実行されます** (別リポジトリの更新が
+目的なので、本体が最新でも取り込みたいため)。
+
+```json
+"updateHooks": [
+  {
+    "name": "ait を更新",
+    "command": "git pull --ff-only",
+    "workingDir": "%USERPROFILE%\\code\\ait",
+    "timeoutSeconds": 120,
+    "enabled": true
+  }
+]
+```
+
+| キー | 意味 |
+|---|---|
+| `name` | ダイアログとログに出す名前。省略するとコマンドがそのまま使われる |
+| `command` | PowerShell に渡される 1 行。複数コマンドは `;` でつなぐ |
+| `workingDir` | 実行するディレクトリ。環境変数を展開する。省略可 |
+| `timeoutSeconds` | これを過ぎたらプロセスごと打ち切る (既定 120、最小 5) |
+| `enabled` | `false` で設定を消さずに止められる |
+
+上から順に実行し、1 つ失敗しても残りは実行します。結果は更新ダイアログの先頭に
+`○` / `×` で出て、`claude-note.log` にも残ります。本体の更新の取り込み自体は、
+フックが失敗しても止まりません。
+
+`ClaudeNote.exe --update-hooks` でフックだけを実行できます (本体の取り込み・ビルドはしない)。
+
+> 設定ファイルの JSON を書き間違えると、**すべて既定値で起動します**
+> (`workspaceDir` もプロファイルも API キーも消える)。気づけるよう起動時に警告を
+> 出しますが、Windows のパスを書くときは `\\` の数に注意してください。
+
 ## 設定
 
 編集するファイルは 1 つだけ:
@@ -110,6 +147,7 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 | `allowedTools` | Claude に自動許可するツール。既定はシェル実行込み (`Read, Glob, Grep, Bash, PowerShell, Write, Edit`)。読み取り専用に絞るなら `["Read","Glob","Grep"]` |
 | `floatButton` | 画面右下の丸ボタンを表示 (既定 true)。タップでホットキーと同じ動作。ペン/タッチ用 |
 | `floatButtonSize` | ボタンの直径 (論理px、既定 56。モニタの DPI に追従) |
+| `updateHooks` | **「更新を確認して適用」で一緒に走らせる自前のコマンド** (上記) |
 | `profiles` | **セクション名で設定を切り替えるプロファイル** (下記) |
 
 フローティングボタンはフォーカスを奪わない (`WS_EX_NOACTIVATE`) ため、OneNote の

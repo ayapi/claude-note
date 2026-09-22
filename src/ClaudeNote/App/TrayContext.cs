@@ -394,6 +394,14 @@ public sealed class TrayContext : ApplicationContext
         catch (Exception ex) { Logger.Log(ex); }
     }
 
+    /// <summary>フックの出力をダイアログ用に1行へ畳む。</summary>
+    private static string OneLine(string text)
+    {
+        var joined = string.Join(" ", text.Replace("\r\n", "\n").Split('\n',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return joined.Length <= 120 ? joined : joined[..120] + "…";
+    }
+
     /// <summary>
     /// リモートに更新があるか調べ、あれば内容を見せてから取り込み・ビルド・再起動を行う。
     /// 実際の作業はアプリ終了後に外部スクリプトが引き継ぐ (実行中は exe を上書きできないため)。
@@ -407,6 +415,23 @@ public sealed class TrayContext : ApplicationContext
         }
 
         _icon.ShowBalloonTip(2000, "ClaudeNote", "更新を確認しています…", ToolTipIcon.Info);
+
+        // 自前のフックを先に走らせる。別リポジトリの更新が目的なので、
+        // ClaudeNote 自身が最新でも実行する
+        RefreshConfig();
+        IReadOnlyList<Updater.HookResult> hooks = [];
+        try
+        {
+            hooks = await Task.Run(() => Updater.RunHooks(_config));
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"更新フックの実行に失敗: {ex.Message}");
+        }
+        var hookReport = hooks.Count == 0
+            ? ""
+            : string.Join("\n", hooks.Select(h => $"{(h.Ok ? "○" : "×")} {h.Label}: {OneLine(h.Message)}")) + "\n\n";
+
         Updater.UpdateStatus status;
         try
         {
@@ -423,13 +448,20 @@ public sealed class TrayContext : ApplicationContext
         if (status.Blocker != null)
         {
             Logger.Log($"更新できません: {status.Blocker}");
-            MessageBox.Show(status.Blocker, "ClaudeNote の更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(hookReport + status.Blocker, "ClaudeNote の更新",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
         if (status.Behind == 0)
         {
             Logger.Log("更新の確認: すでに最新です");
-            _icon.ShowBalloonTip(2000, "ClaudeNote", "すでに最新です。", ToolTipIcon.Info);
+            // フックを走らせたときは、何が起きたか見えないと困るのでダイアログで見せる
+            if (hooks.Count > 0)
+                MessageBox.Show(hookReport + "ClaudeNote 本体はすでに最新です。", "ClaudeNote の更新",
+                    MessageBoxButtons.OK,
+                    hooks.All(h => h.Ok) ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            else
+                _icon.ShowBalloonTip(2000, "ClaudeNote", "すでに最新です。", ToolTipIcon.Info);
             return;
         }
 
@@ -439,7 +471,7 @@ public sealed class TrayContext : ApplicationContext
 
         Logger.Log($"更新の確認: {status.Behind} 件の更新があります");
         var answer = MessageBox.Show(
-            $"{status.Behind} 件の更新があります。\n\n{list}\n\n" +
+            hookReport + $"{status.Behind} 件の更新があります。\n\n{list}\n\n" +
             "取り込んでビルドし、ClaudeNote を再起動します。よろしいですか？\n" +
             "(作業中はコンソールが表示されます)",
             "ClaudeNote の更新", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);

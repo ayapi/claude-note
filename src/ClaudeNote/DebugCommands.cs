@@ -10,6 +10,7 @@ namespace ClaudeNote;
 ///   --ask-test &lt;png&gt; [sessionId]     : PNG を claude CLI に送って応答を表示 (挿入なし)。sessionId 指定で resume 検証
 ///   --insert-test                        : テストページを作成して挿入 → 検証 → ページ削除
 ///   --figure-test                        : 図 (画像 + インク) の挿入を検証 → ページ削除
+///   --update-hooks                       : 設定の updateHooks だけを実行する (本体の更新はしない)
 ///   --mic-list                           : 録音デバイスの一覧
 ///   --record-test [秒]                   : 指定秒だけ録音して文字起こしまで通す
 ///   --stt-test &lt;wav&gt;                 : 既存の WAV を文字起こしする
@@ -31,6 +32,8 @@ internal static class DebugCommands
                     return HandoffTest(config).GetAwaiter().GetResult();
                 case "--update-check":
                     return UpdateCheck();
+                case "--update-hooks":
+                    return UpdateHooks(config);
                 case "--update-apply":
                     return UpdateApply();
                 case "--capture-test":
@@ -95,6 +98,34 @@ internal static class DebugCommands
         Console.WriteLine(s.Behind == 0 ? "すでに最新です。" : $"{s.Behind} 件の更新があります:");
         foreach (var c in s.Commits) Console.WriteLine("  " + c);
         return 0;
+    }
+
+    /// <summary>
+    /// updateHooks だけを実行して結果を出す。フックの設定を確かめるためのもので、
+    /// ClaudeNote 本体の取り込み・ビルドは行わない。
+    /// </summary>
+    private static int UpdateHooks(AppConfig config)
+    {
+        if (config.UpdateHooks.Length == 0)
+        {
+            Console.WriteLine("updateHooks は設定されていません。");
+            return 0;
+        }
+
+        var results = Updater.RunHooks(config);
+        if (results.Count == 0)
+        {
+            Console.WriteLine("実行できるフックがありませんでした (enabled: false か command が空)。");
+            return 0;
+        }
+
+        foreach (var r in results)
+        {
+            Console.WriteLine($"{(r.Ok ? "OK" : "NG")} {r.Label}");
+            foreach (var line in r.Message.Split('\n'))
+                Console.WriteLine("    " + line);
+        }
+        return results.All(r => r.Ok) ? 0 : 1;
     }
 
     /// <summary>

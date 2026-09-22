@@ -19,6 +19,41 @@ public static class Updater
         public bool CanUpdate => Blocker == null && Behind > 0;
     }
 
+    /// <summary>自前フックの実行結果。</summary>
+    public sealed record HookResult(string Label, bool Ok, string Message);
+
+    /// <summary>
+    /// 設定の updateHooks を順に実行する。ClaudeNote 本体の更新の有無とは無関係に走らせる
+    /// (別リポジトリの更新が目的なので、本体が最新でも取り込みたい)。
+    /// 1 つ失敗しても残りは実行する。結果は呼び出し側がまとめて見せる。
+    /// </summary>
+    public static IReadOnlyList<HookResult> RunHooks(AppConfig config)
+    {
+        var results = new List<HookResult>();
+        foreach (var hook in config.UpdateHooks)
+        {
+            if (!hook.Enabled || string.IsNullOrWhiteSpace(hook.Command)) continue;
+
+            var dir = string.IsNullOrWhiteSpace(hook.WorkingDir)
+                ? null
+                : Environment.ExpandEnvironmentVariables(hook.WorkingDir);
+            if (dir != null && !Directory.Exists(dir))
+            {
+                Logger.Log($"更新フック「{hook.Label}」: ディレクトリがありません: {dir}");
+                results.Add(new HookResult(hook.Label, false, $"ディレクトリがありません: {dir}"));
+                continue;
+            }
+
+            Logger.Log($"更新フック「{hook.Label}」を実行します: {hook.Command} (cwd={dir ?? "既定"})");
+            var r = RunShell(hook.Command, dir, Math.Max(hook.TimeoutSeconds, 5));
+            var text = Truncate((r.Output + "\n" + r.Error).Trim(), 400);
+            Logger.Log($"更新フック「{hook.Label}」: exit={r.ExitCode} {Truncate(text, 200)}");
+            results.Add(new HookResult(hook.Label, r.ExitCode == 0,
+                text.Length > 0 ? text : (r.ExitCode == 0 ? "完了" : $"exit {r.ExitCode}")));
+        }
+        return results;
+    }
+
     /// <summary>exe の位置から上に辿って git リポジトリの根を探す。</summary>
     public static string? FindRepoRoot()
     {
@@ -208,6 +243,42 @@ public static class Updater
             var stderr = proc.StandardError.ReadToEnd();
             proc.WaitForExit();
             return new GitResult(proc.ExitCode, stdout, stderr);
+        }
+        catch (Exception ex)
+        {
+            return new GitResult(-1, "", ex.Message);
+        }
+    }
+
+    /// <summary>PowerShell 経由で 1 行のコマンドを実行する。タイムアウトしたら木ごと止める。</summary>
+    private static GitResult RunShell(string command, string? workingDir, int timeoutSeconds)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        if (workingDir != null) psi.WorkingDirectory = workingDir;
+        foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command })
+            psi.ArgumentList.Add(a);
+
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc == null) return new GitResult(-1, "", "PowerShell を起動できませんでした。");
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(timeoutSeconds * 1000))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return new GitResult(-1, "", $"{timeoutSeconds} 秒で終わらなかったので打ち切りました。");
+            }
+            return new GitResult(proc.ExitCode, stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult());
         }
         catch (Exception ex)
         {
