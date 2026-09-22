@@ -419,6 +419,9 @@ internal static class DebugCommands
                 "{{ink: 140,84 200,84 | color=#D40000 | width=2}}",
                 "赤で挟んだはみ出しが引き算のほう。",
                 "{{ink-overlay: 10,10 50,50 | color=#D40000}}",
+                "{{ink-overlay: circle 120,60 r=25 | color=#D40000 | width=3}}",
+                "{{ink-overlay: wave 20,100 160,100 | color=#D40000 | width=2}}",
+                "{{ink-overlay: ? 180,88 size=22 | color=#D40000 | width=2}}",
             ]);
 
             var parts = ResponseParser.Parse(response);
