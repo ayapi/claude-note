@@ -220,7 +220,7 @@ public sealed class ClaudeSidecar : IDisposable
         var script = ResolveScript(config.SidecarDir);
         var psi = new ProcessStartInfo
         {
-            FileName = string.IsNullOrWhiteSpace(config.NodePath) ? "node" : config.NodePath,
+            FileName = AppPaths.Expand(config.NodePath) ?? "node",
             WorkingDirectory = Path.GetDirectoryName(script)!,
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -242,23 +242,25 @@ public sealed class ClaudeSidecar : IDisposable
         return proc;
     }
 
-    private static string ResolveScript(string? sidecarDir)
+    internal static string ResolveScript(string? sidecarDir)
     {
-        if (!string.IsNullOrWhiteSpace(sidecarDir))
+        if (AppPaths.Expand(sidecarDir) is { } configured)
         {
-            var p = Path.Combine(sidecarDir, "index.mjs");
+            var p = Path.Combine(configured, "index.mjs");
             if (File.Exists(p)) return p;
             throw new UserFacingException($"サイドカーが見つかりません: {p}");
         }
 
         // exe の場所から上に辿って sidecar/index.mjs を探す (bin\Release\... → リポジトリ直下)
-        var dir = AppContext.BaseDirectory;
-        for (var i = 0; i < 6 && dir != null; i++)
+        var searched = new List<string>();
+        foreach (var dir in AppPaths.AncestorsFromExe())
         {
             var candidate = Path.Combine(dir, "sidecar", "index.mjs");
             if (File.Exists(candidate)) return candidate;
-            dir = Path.GetDirectoryName(dir);
+            searched.Add(dir);
         }
+        // どこを見に行ったかを残す。見つからない原因はたいてい exe の置き場所なので
+        Logger.Log($"sidecar/index.mjs を次の場所で探しましたが見つかりませんでした: {string.Join(" / ", searched)}");
         throw new UserFacingException("sidecar/index.mjs が見つかりません。appsettings.json の sidecarDir を設定してください。");
     }
 

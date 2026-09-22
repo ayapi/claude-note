@@ -113,10 +113,10 @@ public static class ClaudeCli
 
     public static string Resolve(string? overridePath)
     {
-        if (!string.IsNullOrWhiteSpace(overridePath))
+        if (AppPaths.Expand(overridePath) is { } configured)
         {
-            if (File.Exists(overridePath)) return overridePath;
-            throw new UserFacingException($"設定された claudePath が見つかりません: {overridePath}");
+            if (File.Exists(configured)) return configured;
+            throw new UserFacingException($"設定された claudePath が見つかりません: {configured}");
         }
 
         string[] names = ["claude.cmd", "claude.exe", "claude.bat"];

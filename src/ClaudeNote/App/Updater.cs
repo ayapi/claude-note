@@ -22,11 +22,9 @@ public static class Updater
     /// <summary>exe の位置から上に辿って git リポジトリの根を探す。</summary>
     public static string? FindRepoRoot()
     {
-        var dir = AppContext.BaseDirectory;
-        for (var i = 0; i < 8 && dir != null; i++)
+        foreach (var dir in AppPaths.AncestorsFromExe())
         {
             if (Directory.Exists(Path.Combine(dir, ".git"))) return dir;
-            dir = Path.GetDirectoryName(dir);
         }
         return null;
     }

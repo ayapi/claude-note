@@ -25,6 +25,8 @@ internal static class DebugCommands
             {
                 case "--render-test":
                     return RenderTest(args[1], args[2]);
+                case "--paths":
+                    return PathsCheck(config);
                 case "--handoff-test":
                     return HandoffTest(config).GetAwaiter().GetResult();
                 case "--update-check":
@@ -93,6 +95,40 @@ internal static class DebugCommands
         Console.WriteLine(s.Behind == 0 ? "すでに最新です。" : $"{s.Behind} 件の更新があります:");
         foreach (var c in s.Commits) Console.WriteLine("  " + c);
         return 0;
+    }
+
+    /// <summary>
+    /// 設定と自動検出でどのパスに解決されるかを出す。新しい PC でのセットアップ確認用。
+    /// </summary>
+    private static int PathsCheck(AppConfig config)
+    {
+        Console.WriteLine($"exe の場所      : {AppContext.BaseDirectory}");
+        Console.WriteLine($"設定ファイル    : {AppConfig.UserConfigPath}");
+        Console.WriteLine($"作業ディレクトリ: {AppPaths.Expand(config.WorkspaceDir) ?? "(未設定)"}");
+        Console.WriteLine();
+        Console.WriteLine("上に辿って探す範囲:");
+        foreach (var dir in AppPaths.AncestorsFromExe())
+            Console.WriteLine($"  {dir}");
+        Console.WriteLine();
+
+        var ok = true;
+        try
+        {
+            var script = ClaudeSidecar.ResolveScript(config.SidecarDir);
+            Console.WriteLine($"サイドカー      : {script}");
+            var modules = Path.Combine(Path.GetDirectoryName(script)!, "node_modules");
+            Console.WriteLine($"  node_modules  : {(Directory.Exists(modules) ? "あり" : "なし (sidecar で npm install が必要)")}");
+            if (!Directory.Exists(modules)) ok = false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"サイドカー      : 解決できません — {ex.Message}");
+            ok = false;
+        }
+
+        Console.WriteLine($"リポジトリ      : {Updater.FindRepoRoot() ?? "(見つからない = 更新機能は使えません)"}");
+        Console.WriteLine(ok ? "\n必要なものは揃っています。" : "\n不足があります。上を確認してください。");
+        return ok ? 0 : 1;
     }
 
     /// <summary>
