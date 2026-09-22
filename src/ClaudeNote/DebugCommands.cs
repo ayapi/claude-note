@@ -18,9 +18,27 @@ namespace ClaudeNote;
 /// </summary>
 internal static class DebugCommands
 {
+    /// <summary>自前のコンソールウィンドウで動かすコマンド (対話するもの)。</summary>
+    private static readonly string[] Interactive = ["--diff-test", "--record-test"];
+
     public static int Run(string[] args, AppConfig config)
     {
-        Console.OutputEncoding = Encoding.UTF8;
+        // WinExe はコンソールを持たないので、まず出力先を用意する。
+        // これが無いと PowerShell から叩いても何も表示されない
+        ConsoleHost.Ensure(ownWindow: Interactive.Contains(args[0]));
+        try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        try
+        {
+            return Dispatch(args, config);
+        }
+        finally
+        {
+            ConsoleHost.WaitBeforeClose();
+        }
+    }
+
+    private static int Dispatch(string[] args, AppConfig config)
+    {
         try
         {
             switch (args[0])
