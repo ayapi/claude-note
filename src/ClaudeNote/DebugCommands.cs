@@ -47,6 +47,8 @@ internal static class DebugCommands
                     return RenderTest(args[1], args[2]);
                 case "--topic-test":
                     return TopicTest(config);
+                case "--title-scan":
+                    return args.Length > 1 && args[1] == "section" ? TitleScanSection() : TitleScan();
                 case "--paths":
                     return PathsCheck(config);
                 case "--handoff-test":
@@ -304,6 +306,124 @@ internal static class DebugCommands
     {
         var line = message.Replace("\r\n", " ").Replace('\n', ' ').Trim();
         return line.Length <= 80 ? line : line[..80] + "…";
+    }
+
+    /// <summary>
+    /// いま開いているセクションの全ページについて、タイトルが何でできているかを一覧する。
+    /// 手書きのタイトルが実在するかを探すためのもの。
+    /// </summary>
+    private static int TitleScanSection()
+    {
+        using var onenote = new OneNoteApp();
+        var (_, sectionId) = onenote.GetCurrentContext();
+        if (string.IsNullOrEmpty(sectionId))
+        {
+            Console.WriteLine("OneNote でページを開いた状態で実行してください。");
+            return 1;
+        }
+
+        System.Xml.Linq.XNamespace one = PageXml.One;
+        var hierarchy = System.Xml.Linq.XDocument.Parse(onenote.GetHierarchyXml());
+        var pages = hierarchy.Descendants(one + "Page")
+            .Where(p => (string?)p.Parent?.Attribute("ID") == sectionId)
+            .ToList();
+
+        Console.WriteLine($"セクション {onenote.GetSectionName(sectionId)}: ページ {pages.Count} 個\n");
+        Console.WriteLine($"{"ページ名",-28}{"Title の中身",-22}{"本文",-8}");
+        Console.WriteLine(new string('-', 62));
+
+        foreach (var p in pages)
+        {
+            var id = (string?)p.Attribute("ID");
+            var name = (string?)p.Attribute("name") ?? "(名前なし)";
+            if (id == null) continue;
+            string inside, body;
+            try
+            {
+                var xml = onenote.GetPageXmlBasic(id);
+                var doc = System.Xml.Linq.XDocument.Parse(xml);
+                var title = doc.Root!.Descendants(one + "Title").FirstOrDefault();
+                var kinds = title?.Descendants()
+                    .Select(e => e.Name.LocalName)
+                    .Where(n => n is "T" or "InkWord" or "InkDrawing" or "Image")
+                    .GroupBy(n => n)
+                    .Select(g => $"{g.Key}×{g.Count()}")
+                    .ToList();
+                inside = title == null ? "(Title 要素なし)"
+                    : kinds is { Count: > 0 } ? string.Join(" ", kinds) : "(空)";
+                body = PageSnapshot.FromXml(xml).Objects.Count + " 個";
+            }
+            catch (Exception ex)
+            {
+                inside = "取得できず";
+                body = Summarize(ex.Message);
+            }
+            var shown = name.Length <= 26 ? name : name[..26] + "…";
+            Console.WriteLine($"{shown,-28}{inside,-22}{body,-8}");
+        }
+        Console.WriteLine();
+        Console.WriteLine("InkWord / InkDrawing が Title の中に出ていれば、手書きタイトルは Title に入る。");
+        Console.WriteLine("どのページも T だけなら、手書きは本文側のインクになっている。");
+        return 0;
+    }
+
+    /// <summary>
+    /// いま開いているページのタイトル部分が XML でどう表現されているかを出す。
+    /// 手書きしたタイトルが one:Title の中に入るのか、本文側のインクになるのかを
+    /// 実機で確かめるためのもの。
+    /// </summary>
+    private static int TitleScan()
+    {
+        using var onenote = new OneNoteApp();
+        var (pageId, _) = onenote.GetCurrentContext();
+        if (string.IsNullOrEmpty(pageId))
+        {
+            Console.WriteLine("OneNote でページを開いた状態で実行してください。");
+            return 1;
+        }
+
+        var xml = onenote.GetPageXmlBasic(pageId);
+        var doc = System.Xml.Linq.XDocument.Parse(xml);
+        var page = doc.Root!;
+        System.Xml.Linq.XNamespace one = PageXml.One;
+
+        var title = page.Descendants(one + "Title").FirstOrDefault();
+        Console.WriteLine($"ページ: {pageId}");
+        Console.WriteLine();
+        if (title == null)
+        {
+            Console.WriteLine("one:Title 要素がありません (タイトル未設定のページ)。");
+        }
+        else
+        {
+            Console.WriteLine("--- one:Title の中身 (生の XML) ---");
+            Console.WriteLine(title.ToString());
+            Console.WriteLine();
+            var kinds = title.Descendants()
+                .Select(e => e.Name.LocalName)
+                .Where(n => n is "T" or "InkWord" or "InkDrawing" or "Image")
+                .GroupBy(n => n)
+                .Select(g => $"{g.Key}×{g.Count()}");
+            Console.WriteLine($"タイトル内の要素: {(kinds.Any() ? string.Join(" / ", kinds) : "なし")}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("--- タイトルの外 (本文側) にある上端 5 個 ---");
+        foreach (var el in page.Descendants()
+                     .Where(e => e.Name.LocalName is "InkDrawing" or "InkWord" or "Image" or "OE")
+                     .Where(e => !e.Ancestors(one + "Title").Any())
+                     .Take(5))
+        {
+            var pos = el.Element(one + "Position");
+            Console.WriteLine($"  {el.Name.LocalName,-11} y={(string?)pos?.Attribute("y") ?? "-"} " +
+                $"objectID={((string?)el.Attribute("objectID"))?[..Math.Min(12, ((string?)el.Attribute("objectID"))!.Length)] ?? "なし"}");
+        }
+
+        var snapshot = PageSnapshot.FromXml(xml);
+        Console.WriteLine();
+        Console.WriteLine($"ClaudeNote の解釈: タイトル=「{snapshot.Title}」 / 本文 {snapshot.Objects.Count} 個 " +
+            $"({(snapshot.IsBodyEmpty ? "空" : "あり")})");
+        return 0;
     }
 
     /// <summary>
