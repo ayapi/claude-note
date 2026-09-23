@@ -379,10 +379,16 @@ public sealed class AskFlow
         // -p --resume は毎回新しいセッション ID にフォークする実装もあるため、常に最新 ID を保存する
         SaveSession(store, scopeKey, lineageKey, result.SessionId);
 
+        // タイトルのインクはタイトル欄の座標系で、ページ本文の座標系ではない。
+        // これを挿入位置の基準にすると左上にめり込むので (x=-0.5 y=33.9 になった)、
+        // 位置は持たせず本文の既定位置へ置く。重ね書きの座標も同じ理由で合わないため渡さない
+        var anchorSel = titleInk != null ? new Selection { PageId = pageId } : sel;
+        var anchorMap = titleInk != null ? null : render?.Map;
+
         var parts = ResponseParser.Parse(result.Text);
         var figures = parts.Count(p => p is ImagePart or InkPart);
         if (figures > 0) Logger.Log($"応答に図が {figures} 個含まれています");
-        InsertParts(onenote, pageId, sel, cfg, parts, render?.Map);
+        InsertParts(onenote, pageId, anchorSel, cfg, parts, anchorMap);
 
         // 応答を入れ終えてから基準を取り直す (自分が書いたものを次の差分に含めない)
         CommitBaseline(onenote, pageId);
