@@ -56,6 +56,29 @@ dotnet build src/ClaudeNote/ClaudeNote.csproj -c Release
 `section` から `page` に切り替えた直後は、それまで使っていたセクションの会話を 1 度だけ
 引き継ぎ元にするので、積み上げた文脈が捨てられることはありません。
 
+## セットアップの確認
+
+```powershell
+& "src\ClaudeNote\bin\Release\net9.0-windows\ClaudeNote.exe" --doctor
+```
+
+node / サイドカー / node_modules / claude CLI / リポジトリの有無、設定とプロファイルの
+中身 (モデル・会話の区切り・作業ディレクトリ・音声エンジン)、そして**プロンプト
+テンプレートのプレースホルダ**を確認する。新しい PC に入れたときと、設定を手で
+書き換えたあとに実行する。
+
+プレースホルダの確認が要るのは、**設定ファイルがリポジトリの外** (`%LOCALAPPDATA%`)
+にあるため。コード側で名前を変えても設定は追従せず、古い名前は差し替えられないまま
+生の文字列として送られる。エラーは出ないので、たとえば画像が Claude に届いていない
+ことに気づけない (`{voiceSelection}` → `{voiceWriting}` の改名で実際に起きた)。
+
+```
+NG    voicePromptTemplate  知らないプレースホルダ: {voiceSelection} — …古い名前です
+NG    voicePromptTemplate  必要なプレースホルダがありません: {voiceWriting} — …Claude に渡りません
+```
+
+実行時にも同じ検査をしていて、差し替え漏れが残っているとログに警告が出る。
+
 ## 更新
 
 トレイアイコン右クリック →**「更新を確認して適用」**。リモートとの差分を調べ、取り込む

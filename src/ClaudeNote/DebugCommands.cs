@@ -49,6 +49,8 @@ internal static class DebugCommands
                     return TopicTest(config);
                 case "--title-scan":
                     return args.Length > 1 && args[1] == "section" ? TitleScanSection() : TitleScan();
+                case "--doctor":
+                    return Doctor.Run(config);
                 case "--paths":
                     return PathsCheck(config);
                 case "--handoff-test":
