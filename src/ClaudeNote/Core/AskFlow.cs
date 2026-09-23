@@ -94,11 +94,11 @@ public sealed class AskFlow
             ? string.Join("\n", writingParts)
             : "（前回から新しく書かれたものはありません。発言だけで答えてください）";
         Logger.Log($"音声入力に添える内容: テキスト {sel.Text.Length}文字 / 画像 {(render != null ? "あり" : "なし")}");
-        var prompt = cfg.VoicePromptTemplateText
+        var prompt = CheckPlaceholders(cfg.VoicePromptTemplateText
             .Replace("{voice}", voiceText)
             .Replace("{voiceWriting}", voiceWriting)
             .Replace("{image}", render?.PngPath ?? "")
-            .Replace("{figureGuide}", cfg.FigureGuideText);
+            .Replace("{figureGuide}", cfg.FigureGuideText), "voicePromptTemplate");
 
         var addDirs = cfg.ExpandedAddDirs;
         var handoff = await PrepareHandoffAsync(cfg, store, lineageKey, resumeId == null, runCwd, addDirs, ct);
@@ -517,6 +517,28 @@ public sealed class AskFlow
         return text.Length <= 160 ? text : text[..160] + "…";
     }
 
+    private static readonly System.Text.RegularExpressions.Regex UnresolvedPlaceholder =
+        new(@"(?<!\{)\{[a-zA-Z][a-zA-Z0-9]*\}(?!\})",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// 差し替えられなかったプレースホルダが残っていないかを見る。
+    ///
+    /// 設定ファイルはリポジトリの外 (%LOCALAPPDATA%) にあるため、コード側で
+    /// プレースホルダ名を変えても設定は追従しない。古い名前が生の文字列のまま
+    /// 送られても何のエラーも出ず、画像が届いていないことに気づけない
+    /// ({voiceSelection} → {voiceWriting} の改名で実際に起きた)。
+    /// </summary>
+    private static string CheckPlaceholders(string prompt, string label)
+    {
+        var left = UnresolvedPlaceholder.Matches(prompt)
+            .Select(m => m.Value).Distinct().ToArray();
+        if (left.Length > 0)
+            Logger.Log($"警告: {label} に差し替えられていないプレースホルダが残っています: "
+                + $"{string.Join(", ", left)} (設定ファイルが古い可能性があります)");
+        return prompt;
+    }
+
     private static string BuildPrompt(AppConfig cfg, Selection sel, RenderResult? render, bool resumed,
         string? topic = null, bool titleIsInk = false)
     {
@@ -530,12 +552,14 @@ public sealed class AskFlow
             if (!titleIsInk)
             {
                 Logger.Log($"使用プロンプト: topicStartPromptTemplate (タイトル「{topic}」)");
-                return body;
+                return CheckPlaceholders(body, "topicStartPromptTemplate");
             }
             if (render == null)
                 throw new UserFacingException("手書きのタイトルを画像にできませんでした。");
             Logger.Log("使用プロンプト: topicStartPromptTemplate (タイトルは手書き)");
-            return cfg.TitleInkPromptLine.Replace("{image}", render.PngPath) + "\n" + body;
+            return CheckPlaceholders(
+                cfg.TitleInkPromptLine.Replace("{image}", render.PngPath) + "\n" + body,
+                "topicStartPromptTemplate");
         }
         if (render != null)
         {
@@ -544,17 +568,18 @@ public sealed class AskFlow
                 : $"\n新しく書かれたテキスト:\n---\n{sel.Text}\n---";
             var template = resumed ? cfg.ResumePromptTemplateText : cfg.PromptTemplateText;
             Logger.Log($"使用プロンプト: {(resumed ? "resumePromptTemplate" : "promptTemplate")} ({template.Length}文字)");
-            return template
+            return CheckPlaceholders(template
                 .Replace("{image}", render.PngPath)
                 .Replace("{figureGuide}", cfg.FigureGuideText)
-                .Replace("{textSection}", textSection);
+                .Replace("{textSection}", textSection),
+                resumed ? "resumePromptTemplate" : "promptTemplate");
         }
         if (!string.IsNullOrWhiteSpace(sel.Text))
         {
             Logger.Log("使用プロンプト: textOnlyPromptTemplate");
-            return cfg.TextOnlyPromptTemplateText
+            return CheckPlaceholders(cfg.TextOnlyPromptTemplateText
                 .Replace("{figureGuide}", cfg.FigureGuideText)
-                .Replace("{text}", sel.Text);
+                .Replace("{text}", sel.Text), "textOnlyPromptTemplate");
         }
 
         throw new UserFacingException("書かれた内容から読み取れるものがありませんでした。");
