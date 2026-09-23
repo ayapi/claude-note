@@ -331,18 +331,25 @@ public sealed class AskFlow
         var capture = CaptureNewWriting(onenote, pageId, cfg, onProgress);
 
         // タイトルだけ書かれた新しいページなら、そのタイトルを「やりたいこと」として始める。
-        // 何も書いていない状態から始められるようにするため (以前は音声で言うしかなかった)
-        var topic = capture.IsEmpty && capture.Snapshot.IsBodyEmpty
-            ? capture.Snapshot.Title
-            : null;
-        if (capture.IsEmpty && string.IsNullOrWhiteSpace(topic))
+        // 何も書いていない状態から始められるようにするため (以前は音声で言うしかなかった)。
+        // タイトルが手書きの回は文字が取れないので、インクを描いて画像で読ませる
+        var startFromTitle = capture.IsEmpty && capture.Snapshot.IsBodyEmpty;
+        var topic = startFromTitle ? capture.Snapshot.Title : null;
+        Selection? titleInk = null;
+        if (startFromTitle && string.IsNullOrWhiteSpace(topic))
+        {
+            titleInk = PageSnapshot.BuildTitleSelection(onenote.GetPageXmlBasic(pageId));
+            if (titleInk != null)
+                Logger.Log($"タイトルが手書きです (インク {titleInk.VisualCount} 個)。画像にして送ります");
+        }
+        if (capture.IsEmpty && string.IsNullOrWhiteSpace(topic) && titleInk == null)
         {
             throw new UserFacingException(capture.Snapshot.IsBodyEmpty
                 ? "ページが空です。タイトルにやりたいことを書いてから実行すると、そこから始められます。"
                 : "前回送ってから、まだ何も書かれていません。ノートに書いてから実行してください。");
         }
         if (topic != null) Logger.Log($"タイトルから開始: 「{topic}」");
-        var sel = capture.Selection;
+        var sel = titleInk ?? capture.Selection;
 
         var workspace = ResolveWorkspace(cfg);
         var dir = Path.Combine(workspace, "captures", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
@@ -364,7 +371,8 @@ public sealed class AskFlow
         var addDirs = cfg.ExpandedAddDirs;
         var handoff = await PrepareHandoffAsync(cfg, store, lineageKey, resumeId == null, runCwd, addDirs, ct);
         var outcome = await AskWithContinuityAsync(cfg,
-            resumed => Prepend(handoff, BuildPrompt(cfg, sel, render, resumed, topic)),
+            resumed => Prepend(handoff,
+                BuildPrompt(cfg, sel, render, resumed, topic, titleInk != null)),
             runCwd, resumeId, addDirs, onProgress, ct);
         var result = outcome.Result;
 
@@ -504,15 +512,24 @@ public sealed class AskFlow
     }
 
     private static string BuildPrompt(AppConfig cfg, Selection sel, RenderResult? render, bool resumed,
-        string? topic = null)
+        string? topic = null, bool titleIsInk = false)
     {
-        // タイトルだけのページから始める場合。送るものが無いので画像もテキストも無い
-        if (!string.IsNullOrWhiteSpace(topic))
+        // タイトルから始める場合。タイプしたタイトルは文字で渡せるが、
+        // 手書きのタイトルは文字にできないので、描いた画像を読ませる
+        if (titleIsInk || !string.IsNullOrWhiteSpace(topic))
         {
-            Logger.Log($"使用プロンプト: topicStartPromptTemplate (タイトル「{topic}」)");
-            return cfg.TopicStartPromptTemplateText
-                .Replace("{title}", topic)
+            var body = cfg.TopicStartPromptTemplateText
+                .Replace("{title}", titleIsInk ? "手書き（上の画像に書かれているとおり）" : topic!)
                 .Replace("{figureGuide}", cfg.FigureGuideText);
+            if (!titleIsInk)
+            {
+                Logger.Log($"使用プロンプト: topicStartPromptTemplate (タイトル「{topic}」)");
+                return body;
+            }
+            if (render == null)
+                throw new UserFacingException("手書きのタイトルを画像にできませんでした。");
+            Logger.Log("使用プロンプト: topicStartPromptTemplate (タイトルは手書き)");
+            return cfg.TitleInkPromptLine.Replace("{image}", render.PngPath) + "\n" + body;
         }
         if (render != null)
         {

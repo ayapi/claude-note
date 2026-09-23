@@ -244,6 +244,17 @@ public sealed class AppConfig
         "{figureGuide}",
     ];
 
+    /// <summary>
+    /// タイトルが手書きだったときに、開始プロンプトの先頭へ足す 1 行。{image} に
+    /// タイトルのインクを描いた PNG のパスが入る。OneNote はタイトル欄の手書きを
+    /// テキストにしてくれない (日本語では recognizedText が空白になる) ので、
+    /// 画像として読ませる。
+    /// </summary>
+    [JsonPropertyName("titleInkPromptLine")]
+    public string TitleInkPromptLine { get; set; } =
+        "まず {image} を Read ツールで読み取ってください。これはこのページのタイトルを手書きしたものです。"
+        + "そこに書かれているのが、これからやりたい内容です。";
+
     /// <summary>会話を継続 (resume) するときの短いプロンプト。文脈はセッション側にある前提。</summary>
     [JsonPropertyName("resumePromptTemplate")]
     public string[] ResumePromptTemplate { get; set; } =
@@ -542,6 +553,7 @@ public sealed class AppConfig
             VoiceIncludesWriting = VoiceIncludesWriting,
             VoicePromptTemplate = profile.VoicePromptTemplate ?? VoicePromptTemplate,
             TopicStartPromptTemplate = profile.TopicStartPromptTemplate ?? TopicStartPromptTemplate,
+            TitleInkPromptLine = TitleInkPromptLine,
             AllowedTools = profile.AllowedTools ?? AllowedTools,
             AddDirs = profile.AddDirs ?? AddDirs,
             PromptTemplate = profile.PromptTemplate ?? PromptTemplate,

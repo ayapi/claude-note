@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -124,6 +125,70 @@ public sealed class PageSnapshot
             Objects = objects,
             Title = ReadTitle(page),
         };
+    }
+
+    /// <summary>
+    /// タイトルを手書きしたときのインクだけを集めた Selection。手書きでなければ null。
+    ///
+    /// OneNote はタイトル欄の手書きを one:Title の中に one:InkWord として持つ。
+    /// 本文側には何も現れないため、ここを見ないと手書きタイトルは完全に見えない。
+    /// OneNote 自身の認識結果 (recognizedText) は日本語だと空白しか返らないので当てにせず、
+    /// インクを描画して Claude に読ませる。
+    ///
+    /// 本文のインクと違い、位置は Position/Size の子要素ではなく x/y/width/height 属性で持つ。
+    /// ISF はバイナリ抜きの XML にも入っているので、軽い取得のままで足りる。
+    /// </summary>
+    public static Selection? BuildTitleSelection(string pageXml)
+    {
+        var doc = XDocument.Parse(pageXml);
+        var page = doc.Root;
+        var title = page?.Descendants(One + "Title").FirstOrDefault();
+        if (title == null) return null;
+
+        var sel = new Selection { PageId = (string?)page!.Attribute("ID") ?? "" };
+        Rect? bounds = null;
+        foreach (var el in title.Descendants()
+                     .Where(e => e.Name.LocalName is "InkWord" or "InkDrawing"))
+        {
+            var isf = ReadData(el);
+            if (isf == null) continue;
+            // 要素の x/width は使わない。これらは 1 画ごとの入れ物の大きさで、
+            // ISF 側は 15 画ぶんが 1 つの座標空間を共有しているため (inkOriginX が
+            // その差を表す)、要素の矩形に合わせて個別に拡縮すると字が崩れる。
+            // ISF の実寸から矩形を起こせば、全部が同じ倍率で正しい位置に並ぶ
+            var rect = NaturalRectPt(isf);
+            if (rect is not Rect r) continue;
+
+            sel.VisualCount++;
+            sel.SelectedInkCount++;
+            sel.VisualRects.Add(r);
+            bounds = bounds is Rect b ? Rect.Union(b, r) : r;
+            sel.Ink.Add(new InkItem(isf, r));
+        }
+
+        if (sel.VisualCount == 0) return null;
+        sel.BoundsPt = bounds;
+        return sel;
+    }
+
+    /// <summary>DIP で書かれた ISF の外接矩形を pt に直す。</summary>
+    private static Rect? NaturalRectPt(byte[] isf)
+    {
+        const double dipPerPt = 96.0 / 72.0;
+        try
+        {
+            var strokes = new System.Windows.Ink.StrokeCollection(new MemoryStream(isf));
+            if (strokes.Count == 0) return null;
+            var b = strokes.GetBounds();
+            if (b.Width <= 0 || b.Height <= 0) return null;
+            return new Rect(b.X / dipPerPt, b.Y / dipPerPt,
+                Math.Max(b.Width / dipPerPt, 0.01), Math.Max(b.Height / dipPerPt, 0.01));
+        }
+        catch (Exception ex)
+        {
+            Logger.Log($"タイトルのインクを読めませんでした (スキップ): {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>

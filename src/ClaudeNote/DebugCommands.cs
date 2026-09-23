@@ -407,6 +407,41 @@ internal static class DebugCommands
             Console.WriteLine($"タイトル内の要素: {(kinds.Any() ? string.Join(" / ", kinds) : "なし")}");
         }
 
+        if (title != null)
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- タイトル内インクの実寸と、指定されている矩形 ---");
+            Console.WriteLine($"{"#",-3}{"x",8}{"inkOrgX",9}{"w(pt)",8}{"h(pt)",8}   " +
+                $"{"ISFの実寸 (DIP)",-34}{"倍率",8}");
+            var n = 0;
+            foreach (var el in title.Descendants()
+                         .Where(e => e.Name.LocalName is "InkWord" or "InkDrawing"))
+            {
+                n++;
+                var data = el.Element(one + "Data")?.Value;
+                string natural = "(ISF なし)", ratio = "-";
+                if (!string.IsNullOrWhiteSpace(data))
+                {
+                    try
+                    {
+                        var strokes = new System.Windows.Ink.StrokeCollection(
+                            new MemoryStream(Convert.FromBase64String(data.Trim())));
+                        var b = strokes.GetBounds();
+                        natural = $"x={b.X:0.#} y={b.Y:0.#} {b.Width:0.#}x{b.Height:0.#} ({strokes.Count}本)";
+                        if (double.TryParse((string?)el.Attribute("width"), out var w) && b.Width > 0.05)
+                            ratio = $"{w / b.Width:0.###}";
+                    }
+                    catch (Exception ex) { natural = "読めず: " + Summarize(ex.Message); }
+                }
+                Console.WriteLine($"{n,-3}{(string?)el.Attribute("x"),8}" +
+                    $"{(string?)el.Attribute("inkOriginX") ?? "-",9}" +
+                    $"{(string?)el.Attribute("width"),8}{(string?)el.Attribute("height"),8}   " +
+                    $"{natural,-34}{ratio,8}");
+            }
+            Console.WriteLine();
+            Console.WriteLine("倍率が 0.75 前後で揃っていれば素直に描ける。ばらつくなら ISF の座標系が共有されている。");
+        }
+
         Console.WriteLine();
         Console.WriteLine("--- タイトルの外 (本文側) にある上端 5 個 ---");
         foreach (var el in page.Descendants()
@@ -463,6 +498,30 @@ internal static class DebugCommands
         {
             Console.WriteLine("→ 書かれたぶんを送ります (いつもの経路)。");
             return 0;
+        }
+        if (snapshot.IsBodyEmpty && string.IsNullOrWhiteSpace(snapshot.Title))
+        {
+            var ink = PageSnapshot.BuildTitleSelection(onenote.GetPageXmlBasic(pageId));
+            if (ink != null)
+            {
+                Console.WriteLine($"→ タイトルが手書きです (インク {ink.VisualCount} 個、"
+                    + $"ISF {ink.Ink.Count} 個)。画像にして送ります。");
+                var dir = Path.Combine(Logger.BaseDir, "titletest");
+                Directory.CreateDirectory(dir);
+                var png = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd-HHmmss}.png");
+                var r = SelectionRenderer.RenderToPng(ink, png, cfg.CaptureBackground);
+                if (r == null)
+                {
+                    Console.WriteLine("   ただし描画できませんでした。");
+                    return 1;
+                }
+                Console.WriteLine($"   {r.WidthPx}x{r.HeightPx}px → {r.PngPath}");
+                OpenFile(r.PngPath);
+                Console.WriteLine();
+                Console.WriteLine("送られるプロンプトの先頭:");
+                Console.WriteLine("  " + cfg.TitleInkPromptLine.Replace("{image}", r.PngPath));
+                return 0;
+            }
         }
         if (snapshot.IsBodyEmpty && !string.IsNullOrWhiteSpace(snapshot.Title))
         {
