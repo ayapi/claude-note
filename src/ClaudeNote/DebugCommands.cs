@@ -45,6 +45,8 @@ internal static class DebugCommands
             {
                 case "--render-test":
                     return RenderTest(args[1], args[2]);
+                case "--topic-test":
+                    return TopicTest(config);
                 case "--paths":
                     return PathsCheck(config);
                 case "--handoff-test":
@@ -302,6 +304,60 @@ internal static class DebugCommands
     {
         var line = message.Replace("\r\n", " ").Replace('\n', ' ').Trim();
         return line.Length <= 80 ? line : line[..80] + "…";
+    }
+
+    /// <summary>
+    /// いま開いているページで、ボタンを押したらどう動くかを判定だけして見せる。
+    /// タイトルから始める経路に入るかを、送信せずに確かめるためのもの。
+    /// </summary>
+    private static int TopicTest(AppConfig config)
+    {
+        using var onenote = new OneNoteApp();
+        var (pageId, sectionId) = onenote.GetCurrentContext();
+        if (string.IsNullOrEmpty(pageId))
+        {
+            Console.WriteLine("OneNote でページを開いた状態で実行してください。");
+            return 1;
+        }
+
+        var cfg = config;
+        if (config.Profiles.Length > 0 && !string.IsNullOrEmpty(sectionId))
+        {
+            var sectionName = onenote.GetSectionName(sectionId);
+            cfg = config.ResolveForSection(sectionName, out var matched);
+            Console.WriteLine($"セクション : {sectionName}  → プロファイル {matched}");
+        }
+
+        var snapshot = PageSnapshot.FromXml(onenote.GetPageXmlBasic(pageId));
+        var baseline = BaselineStore.Load(pageId);
+        var changes = snapshot.ChangesSince(baseline);
+
+        Console.WriteLine($"タイトル   : {(string.IsNullOrWhiteSpace(snapshot.Title) ? "(なし)" : snapshot.Title)}");
+        Console.WriteLine($"本文       : オブジェクト {snapshot.Objects.Count} 個 " +
+            $"({(snapshot.IsBodyEmpty ? "空" : "あり")})");
+        Console.WriteLine($"基準       : {(baseline == null ? "まだ無い (このページで初めて送る)" : $"{baseline.Fingerprints.Count} 個")}");
+        Console.WriteLine($"差分       : {changes.Count} 個");
+        Console.WriteLine();
+
+        if (changes.Count > 0)
+        {
+            Console.WriteLine("→ 書かれたぶんを送ります (いつもの経路)。");
+            return 0;
+        }
+        if (snapshot.IsBodyEmpty && !string.IsNullOrWhiteSpace(snapshot.Title))
+        {
+            Console.WriteLine($"→ タイトル「{snapshot.Title}」から始めます。送られるプロンプト:");
+            Console.WriteLine(new string('-', 70));
+            Console.WriteLine(cfg.TopicStartPromptTemplateText
+                .Replace("{title}", snapshot.Title)
+                .Replace("{figureGuide}", cfg.FigureGuideText));
+            Console.WriteLine(new string('-', 70));
+            return 0;
+        }
+        Console.WriteLine(snapshot.IsBodyEmpty
+            ? "→ 何も起きません (ページが空で、タイトルも無い)。"
+            : "→ 何も起きません (前回から書き足されていない)。");
+        return 1;
     }
 
     /// <summary>

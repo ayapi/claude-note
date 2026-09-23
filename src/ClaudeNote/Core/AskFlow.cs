@@ -329,11 +329,19 @@ public sealed class AskFlow
         }
 
         var capture = CaptureNewWriting(onenote, pageId, cfg, onProgress);
-        if (capture.IsEmpty)
+
+        // タイトルだけ書かれた新しいページなら、そのタイトルを「やりたいこと」として始める。
+        // 何も書いていない状態から始められるようにするため (以前は音声で言うしかなかった)
+        var topic = capture.IsEmpty && capture.Snapshot.IsBodyEmpty
+            ? capture.Snapshot.Title
+            : null;
+        if (capture.IsEmpty && string.IsNullOrWhiteSpace(topic))
         {
-            throw new UserFacingException(
-                "前回送ってから、まだ何も書かれていません。ノートに書いてから実行してください。");
+            throw new UserFacingException(capture.Snapshot.IsBodyEmpty
+                ? "ページが空です。タイトルにやりたいことを書いてから実行すると、そこから始められます。"
+                : "前回送ってから、まだ何も書かれていません。ノートに書いてから実行してください。");
         }
+        if (topic != null) Logger.Log($"タイトルから開始: 「{topic}」");
         var sel = capture.Selection;
 
         var workspace = ResolveWorkspace(cfg);
@@ -356,7 +364,7 @@ public sealed class AskFlow
         var addDirs = cfg.ExpandedAddDirs;
         var handoff = await PrepareHandoffAsync(cfg, store, lineageKey, resumeId == null, runCwd, addDirs, ct);
         var outcome = await AskWithContinuityAsync(cfg,
-            resumed => Prepend(handoff, BuildPrompt(cfg, sel, render, resumed)),
+            resumed => Prepend(handoff, BuildPrompt(cfg, sel, render, resumed, topic)),
             runCwd, resumeId, addDirs, onProgress, ct);
         var result = outcome.Result;
 
@@ -495,8 +503,17 @@ public sealed class AskFlow
         return text.Length <= 160 ? text : text[..160] + "…";
     }
 
-    private static string BuildPrompt(AppConfig cfg, Selection sel, RenderResult? render, bool resumed)
+    private static string BuildPrompt(AppConfig cfg, Selection sel, RenderResult? render, bool resumed,
+        string? topic = null)
     {
+        // タイトルだけのページから始める場合。送るものが無いので画像もテキストも無い
+        if (!string.IsNullOrWhiteSpace(topic))
+        {
+            Logger.Log($"使用プロンプト: topicStartPromptTemplate (タイトル「{topic}」)");
+            return cfg.TopicStartPromptTemplateText
+                .Replace("{title}", topic)
+                .Replace("{figureGuide}", cfg.FigureGuideText);
+        }
         if (render != null)
         {
             var textSection = string.IsNullOrWhiteSpace(sel.Text)

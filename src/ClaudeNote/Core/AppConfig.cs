@@ -39,6 +39,9 @@ public sealed class ConfigProfile
     [JsonPropertyName("voicePromptTemplate")]
     public string[]? VoicePromptTemplate { get; set; }
 
+    [JsonPropertyName("topicStartPromptTemplate")]
+    public string[]? TopicStartPromptTemplate { get; set; }
+
     /// <summary>会話の区切り方 (section / page / off)。用途ごとに変えたいので上書きできる。</summary>
     [JsonPropertyName("sessionScope")]
     public string? SessionScope { get; set; }
@@ -224,6 +227,21 @@ public sealed class AppConfig
         "---",
         "{text}",
         "---",
+    ];
+
+    /// <summary>
+    /// タイトルだけ書かれた新しいページでボタンを押したときのプロンプト。{title} にタイトルが入る。
+    /// 何も書いていない状態から始められるようにするためのもので、
+    /// 「何をやりたいか」をタイトルで指示する使い方を想定している。
+    /// </summary>
+    [JsonPropertyName("topicStartPromptTemplate")]
+    public string[] TopicStartPromptTemplate { get; set; } =
+    [
+        "新しいページが開かれました。ページのタイトルは「{title}」です。",
+        "これからこのタイトルの内容に取り組みます。相手はまだ何も書いていません。",
+        "タイトルを手がかりに、最初の 1 問を出してください。いきなり解説を始めないこと。",
+        "出力はそのまま OneNote に挿入されます。プレーンテキストのみ（マークダウン記法なし）。",
+        "{figureGuide}",
     ];
 
     /// <summary>会話を継続 (resume) するときの短いプロンプト。文脈はセッション側にある前提。</summary>
@@ -467,6 +485,7 @@ public sealed class AppConfig
     public string PromptTemplateText => string.Join("\n", PromptTemplate);
     public string TextOnlyPromptTemplateText => string.Join("\n", TextOnlyPromptTemplate);
     public string ResumePromptTemplateText => string.Join("\n", ResumePromptTemplate);
+    public string TopicStartPromptTemplateText => string.Join("\n", TopicStartPromptTemplate);
 
     /// <summary>セクション名に一致するプロファイルを重ねた実効設定を返す。一致なしなら自身を返す。</summary>
     public AppConfig ResolveForSection(string sectionName, out string matchedLabel)
@@ -522,6 +541,7 @@ public sealed class AppConfig
             VoiceColor = VoiceColor,
             VoiceIncludesWriting = VoiceIncludesWriting,
             VoicePromptTemplate = profile.VoicePromptTemplate ?? VoicePromptTemplate,
+            TopicStartPromptTemplate = profile.TopicStartPromptTemplate ?? TopicStartPromptTemplate,
             AllowedTools = profile.AllowedTools ?? AllowedTools,
             AddDirs = profile.AddDirs ?? AddDirs,
             PromptTemplate = profile.PromptTemplate ?? PromptTemplate,

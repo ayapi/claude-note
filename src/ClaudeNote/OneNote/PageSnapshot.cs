@@ -74,6 +74,12 @@ public sealed class PageSnapshot
     public IReadOnlyDictionary<string, PageObject> Objects { get; init; }
         = new Dictionary<string, PageObject>();
 
+    /// <summary>ページタイトル。差分の対象ではないが、何をやるかの手がかりとして使う。</summary>
+    public string Title { get; init; } = "";
+
+    /// <summary>タイトル以外に何も無いページか。新しく開いたページの判定に使う。</summary>
+    public bool IsBodyEmpty => Objects.Count == 0;
+
     private static readonly XNamespace One = PageXml.One;
     private static readonly Regex TagPattern = new("<[^>]+>", RegexOptions.Compiled);
 
@@ -116,7 +122,22 @@ public sealed class PageSnapshot
         {
             PageId = (string?)page.Attribute("ID") ?? "",
             Objects = objects,
+            Title = ReadTitle(page),
         };
+    }
+
+    /// <summary>
+    /// ページタイトルの文字列。OneNote の既定タイトル (日付や時刻がそのまま入っているもの) は
+    /// 単元名として使えないので空として扱う。
+    /// </summary>
+    private static string ReadTitle(XElement page)
+    {
+        var text = string.Join(" ", page.Descendants(One + "Title")
+            .Descendants(One + "OE")
+            .Select(ReadText)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim()));
+        return text.Trim();
     }
 
     /// <summary>保存用の基準 (objectID → 指紋)。</summary>
